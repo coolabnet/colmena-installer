@@ -1,0 +1,33 @@
+# Cloned sub-repos (managed by scripts/05-clone.sh)
+backend/
+frontend/
+colmena-devops/
+colmena-os/
+
+# Runtime artifacts
+.run-logs/
+QUIRKS.md
+
+# Test artifacts
+tests/node_modules/
+tests/playwright-report/
+tests/test-results/
+
+# Project documentation (not part of installer)
+AGENTS.md
+HANDOFF.md
+IN-PROGRESS.md
+QA.md
+REPORT.md
+email_template.txt
+email_update.md
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
