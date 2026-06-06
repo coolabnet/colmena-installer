@@ -174,9 +174,13 @@ stage 30 "Backend: venv, install, db, server"
 cd "$BACKEND_DIR" || exit 1
 
 step "Set up Python 3.10.0 via pyenv"
+# Use the absolute binary path, not the shim. On a fresh pyenv install the
+# python3.10 shim isn't always created (pyenv rehash only generates shims for
+# selected tools), so the venv creation that follows would otherwise fail with
+# "python3.10: command not found".
 export PATH="$HOME/.pyenv/shims:$HOME/.pyenv/bin:$PATH"
-PY310="$HOME/.pyenv/shims/python3.10"
-[[ -x "$PY310" ]] || { fail "python3.10 not on PATH ($PY310 missing)"; exit 1; }
+PY310="$HOME/.pyenv/versions/3.10.0/bin/python3.10"
+[[ -x "$PY310" ]] || { fail "Python 3.10.0 binary missing at $PY310 (prereqs should have built it)"; exit 1; }
 
 step "Ensure backend .env exists"
 if [[ ! -f .env && -f .env.example ]]; then

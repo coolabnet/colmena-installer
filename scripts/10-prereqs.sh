@@ -58,14 +58,26 @@ fi
 
 # ---- Python 3.10.0 (built by pyenv) --------------------------------------------------------------------------------------
 step "Check Python 3.10.0"
-PY310_SHIM="$HOME/.pyenv/shims/python3.10"
-if [[ -x "$PY310_SHIM" ]] || $PYENV_BIN versions --bare 2>/dev/null | grep -q '^3\.10\.0$'; then
+if [[ -x "$HOME/.pyenv/versions/3.10.0/bin/python3.10" ]]; then
   ok "pyenv 3.10.0 installed"
+  ok "python3.10 -> $($HOME/.pyenv/versions/3.10.0/bin/python3.10 -V 2>&1)"
+elif $PYENV_BIN versions --bare 2>/dev/null | grep -q '^3\.10\.0$'; then
+  # 3.10.0 is listed but the binary is missing or wasn't built correctly.
+  # Try pyenv rehash + a re-install to recover.
+  warn "pyenv lists 3.10.0 but binary is missing; rehash + retry"
+  $PYENV_BIN rehash 2>/dev/null || true
+  if [[ ! -x "$HOME/.pyenv/versions/3.10.0/bin/python3.10" ]]; then
+    $PYENV_BIN install 3.10.0 >>"$PREREQ_LOG" 2>&1
+  fi
+  if [[ ! -x "$HOME/.pyenv/versions/3.10.0/bin/python3.10" ]]; then
+    fail "Python 3.10.0 binary still missing at \$HOME/.pyenv/versions/3.10.0/bin/python3.10 (re-run with INSTALL_MISSING=1)"
+    exit 1
+  fi
+  ok "python3.10 -> $($HOME/.pyenv/versions/3.10.0/bin/python3.10 -V 2>&1)"
 else
   if [[ "$INSTALL_MISSING" == "1" && "$PKG_MGR" == "apt" ]]; then
     step "Install Python 3.10.0 via pyenv (compiles ~3 min)"
     if [[ "$PKG_MGR" == "apt" ]]; then
-      # Build dependencies for cpython on Ubuntu/Debian. Idempotent.
       sudo -n apt-get update -y >>"$PREREQ_LOG" 2>&1 || true
       sudo -n apt-get install -y --no-install-recommends \
         build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev \
@@ -73,8 +85,10 @@ else
         >>"$PREREQ_LOG" 2>&1 || true
     fi
     $PYENV_BIN install 3.10.0 >>"$PREREQ_LOG" 2>&1
-    if $PYENV_BIN versions --bare 2>/dev/null | grep -q '^3\.10\.0$'; then
+    $PYENV_BIN rehash >>"$PREREQ_LOG" 2>&1 || true
+    if [[ -x "$HOME/.pyenv/versions/3.10.0/bin/python3.10" ]]; then
       ok "pyenv 3.10.0 built"
+      ok "python3.10 -> $($HOME/.pyenv/versions/3.10.0/bin/python3.10 -V 2>&1)"
     else
       fail "pyenv 3.10.0 build failed; see $PREREQ_LOG"
       exit 1
@@ -84,8 +98,6 @@ else
     exit 1
   fi
 fi
-[[ -x "$PY310_SHIM" ]] || { fail "no shim for python3.10"; exit 1; }
-ok "python3.10 -> $($PY310_SHIM -V 2>&1)"
 
 # ---- Node 20.x --------------------------------------------------------------------------------------------------------------------------------
 step "Check node"
