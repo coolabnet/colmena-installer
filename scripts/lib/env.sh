@@ -8,6 +8,11 @@ FRONTEND_DIR="$WORKSPACE_ROOT/frontend"
 DEVOPS_DIR="$WORKSPACE_ROOT/colmena-devops"
 COLMENA_OS_DIR="$WORKSPACE_ROOT/colmena-os"
 
+# Some background-launch contexts (cloud-init runcmd, nohup from systemd-style
+# runners) leave $HOME unset, which would trip `set -u` in any script that
+# sources this file. Pin a sane default so the rest of the file can rely on it.
+export HOME="${HOME:-/root}"
+
 LOG_DIR="$WORKSPACE_ROOT/.run-logs"
 mkdir -p "$LOG_DIR"
 
@@ -26,7 +31,7 @@ FRONTEND_LOG="$LOG_DIR/frontend.log"
 INFRA_LOG="$LOG_DIR/infra.log"
 PREREQ_LOG="$LOG_DIR/prereqs.log"
 
-# pyenv-managed Python (prepend only when present — supports droplets & CI)
+# pyenv-managed Python (prepend only when present -- supports droplets & CI)
 if [[ -d "$HOME/.pyenv/shims" ]]; then
   export PATH="$HOME/.pyenv/shims:$HOME/.pyenv/bin:$PATH"
 fi

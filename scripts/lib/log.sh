@@ -64,7 +64,7 @@ quirk() {
 _append_quirk() {
   local title="$1" detail="$2"
   {
-    printf -- "- \`%s\` **%s** — %s\n" "$(ts)" "$title" "${detail:-no detail}"
+    printf -- "- \`%s\` **%s** -- %s\n" "$(ts)" "$title" "${detail:-no detail}"
   } >> "$QUIRK_LOG"
 }
 

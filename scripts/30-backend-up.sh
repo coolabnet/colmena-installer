@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stage 30 — backend: venv, install, db.create/migrate/seeds, server :8000
+# Stage 30 -- backend: venv, install, db.create/migrate/seeds, server :8000
 # Uses the Makefile (source of truth) for test/seeds, then runs the server directly.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

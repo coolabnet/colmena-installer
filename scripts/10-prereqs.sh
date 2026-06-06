@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Stage 10 — prereqs: verify (or install) pyenv/Python 3.10, Node 20.x, Docker, Playwright
+# Stage 10 -- prereqs: verify (or install) pyenv/Python 3.10, Node 20.x, Docker, Playwright
 #
 # Flags (env):
-#   INSTALL_MISSING=1 — when set, installs missing pyenv/Python and Node from package managers
+#   INSTALL_MISSING=1 -- when set, installs missing pyenv/Python and Node from package managers
 #                       (idempotent; safe to re-run). Used by cloud-init's background stack job.
-#   SKIP_DEV_TOOLS=1  — skip browser-harness + global playwright checks (droplet has no browser)
-#   STACK_MODE=droplet — informational; affects logging only
+#   SKIP_DEV_TOOLS=1  -- skip browser-harness + global playwright checks (droplet has no browser)
+#   STACK_MODE=droplet -- informational; affects logging only
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/log.sh
@@ -119,7 +119,7 @@ DOCKER_BIN=$(command -v docker || true)
 if [[ -n "$DOCKER_BIN" ]]; then
   ok "docker at $DOCKER_BIN ($($DOCKER_BIN -v 2>&1 | head -1))"
   if $DOCKER_BIN info 2>/dev/null | grep -q 'rootless: true'; then
-    warn "rootless Docker detected — Nextcloud will be blocked by UID mapping"
+    warn "rootless Docker detected -- Nextcloud will be blocked by UID mapping"
     quirk "rootless-docker" "Nextcloud data dir will fail with permission denied; see REPORT.md"
   fi
 else

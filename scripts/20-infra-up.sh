@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stage 20 — infra: docker compose up Postgres, pgAdmin, Mailcrab (Nextcloud best-effort)
+# Stage 20 -- infra: docker compose up Postgres, pgAdmin, Mailcrab (Nextcloud best-effort)
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/log.sh

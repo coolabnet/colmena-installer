@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/wait-and-test.sh — wait for the droplet stack to be ready, then run Playwright
+# scripts/wait-and-test.sh -- wait for the droplet stack to be ready, then run Playwright
 #
 # Usage:
 #   COLMENA_DOMAIN=example.colmena.network bash scripts/wait-and-test.sh
@@ -35,7 +35,7 @@ if [[ ! -d "$WORKSPACE_ROOT/terraform" ]]; then
 fi
 DROPLET_IP=$(terraform -chdir="$WORKSPACE_ROOT/terraform" output -raw droplet_ip 2>/dev/null || true)
 if [[ -z "$DROPLET_IP" || "$DROPLET_IP" == "null" ]]; then
-  fail "could not read terraform output 'droplet_ip' — has terraform apply succeeded?"
+  fail "could not read terraform output 'droplet_ip' -- has terraform apply succeeded?"
   exit 1
 fi
 ok "droplet_ip=$DROPLET_IP"

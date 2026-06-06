@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# run-stack.sh — one-shot orchestrator for the Colmena per-module stack
+# run-stack.sh -- one-shot orchestrator for the Colmena per-module stack
 #
 # Stages:
-#   05 clone         — ensure all repos are present (clone if missing, checkout branch)
-#   10 prereqs       — verify (or install) pyenv/python3.10/node/docker/playwright
-#   20 infra         — docker compose up Postgres, pgAdmin, Mailcrab, Nextcloud
-#   25 credential-sync — reconcile devops .env credentials into backend .env
-#   30 backend       — venv, install, db.create/migrate/seeds, server :8000
-#   40 frontend      — npm install, vite dev :5173
-#   50 tests         — backend tests, tsc, vite build, Playwright E2E
-#   90 teardown      — kill processes, docker compose down
+#   05 clone         -- ensure all repos are present (clone if missing, checkout branch)
+#   10 prereqs       -- verify (or install) pyenv/python3.10/node/docker/playwright
+#   20 infra         -- docker compose up Postgres, pgAdmin, Mailcrab, Nextcloud
+#   25 credential-sync -- reconcile devops .env credentials into backend .env
+#   30 backend       -- venv, install, db.create/migrate/seeds, server :8000
+#   40 frontend      -- npm install, vite dev :5173
+#   50 tests         -- backend tests, tsc, vite build, Playwright E2E
+#   90 teardown      -- kill processes, docker compose down
 #
 # Usage:
 #   bash run-stack.sh           # full run
@@ -45,7 +45,7 @@ mkdir -p "$LOG_DIR"
 reset_quirk_log
 
 # Banner
-printf '\n%s%sColmena stack — per-module run%s\n' "$C_BOLD" "$C_CYAN" "$C_RESET"
+printf '\n%s%sColmena stack -- per-module run%s\n' "$C_BOLD" "$C_CYAN" "$C_RESET"
 printf '%sworkspace: %s%s\n' "$C_DIM" "$WORKSPACE_ROOT" "$C_RESET"
 printf '%slogs:      %s%s\n' "$C_DIM" "$LOG_DIR" "$C_RESET"
 printf '%squirks:    %s%s\n' "$C_DIM" "$QUIRK_LOG" "$C_RESET"

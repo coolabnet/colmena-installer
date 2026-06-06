@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Stage 50 — tests: backend pytest, frontend type check, browser e2e (Playwright)
+# Stage 50 -- tests: backend pytest, frontend type check, browser e2e (Playwright)
 #
 # Mode detection: if PLAYWRIGHT_BASE_URL starts with https://, treat this as a
-# remote/droplet run — skip backend test re-run, tsc, and vite build (those run
+# remote/droplet run -- skip backend test re-run, tsc, and vite build (those run
 # on the droplet itself). Only run Playwright against the remote URL.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,9 +52,9 @@ if [[ $REMOTE -eq 0 ]]; then
     skip "vite build (SKIP_BUILD=1)"
   fi
 else
-  skip "backend test suite (remote mode — ran on droplet)"
-  skip "frontend tsc check (remote mode — ran on droplet)"
-  skip "vite build (remote mode — ran on droplet)"
+  skip "backend test suite (remote mode -- ran on droplet)"
+  skip "frontend tsc check (remote mode -- ran on droplet)"
+  skip "vite build (remote mode -- ran on droplet)"
 fi
 
 step "Playwright E2E"

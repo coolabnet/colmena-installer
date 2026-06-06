@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stage 25 — credential sync: copy postgres creds from colmena-devops/.env to backend/.env
+# Stage 25 -- credential sync: copy postgres creds from colmena-devops/.env to backend/.env
 #
 # Runs after stage 20 (infra up) so the devops .env exists, and before stage 30 (backend)
 # so Django can connect with the right credentials. Idempotent.
@@ -52,12 +52,12 @@ sync_key() {
   fi
   if [[ -n "$cur_val" && "$cur_val" != "$new_val" ]]; then
     if [[ "$PRESERVE" == "1" ]]; then
-      warn "$key differs (devops=$new_val, backend=$cur_val) — preserved (BACKEND_ENV_PRESERVE=1)"
+      warn "$key differs (devops=$new_val, backend=$cur_val) -- preserved (BACKEND_ENV_PRESERVE=1)"
       quirk "env-override" "$key: devops=$new_val, backend=$cur_val (preserved)"
       PRESERVED=$((PRESERVED+1))
       return
     fi
-    warn "$key differs (devops=$new_val, backend=$cur_val) — overriding"
+    warn "$key differs (devops=$new_val, backend=$cur_val) -- overriding"
     quirk "env-override" "$key: backend=$cur_val -> $new_val"
     sed -i.bak "s|^${key}=.*|${key}=${new_val}|" "$BACKEND_DIR/.env"
     rm -f "$BACKEND_DIR/.env.bak"

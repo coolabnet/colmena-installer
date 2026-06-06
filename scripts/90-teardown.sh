@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stage 90 — teardown: kill dev servers, stop/clean compose stack
+# Stage 90 -- teardown: kill dev servers, stop/clean compose stack
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/log.sh

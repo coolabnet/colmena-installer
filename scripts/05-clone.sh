@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stage 05 — clone: ensure all required repos are present and on the right branch
+# Stage 05 -- clone: ensure all required repos are present and on the right branch
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/log.sh
@@ -89,7 +89,7 @@ ensure_repo() {
   local branch="$4"
 
   if [[ -d "$dir/.git" ]]; then
-    # Repo exists — fetch and checkout the target branch
+    # Repo exists -- fetch and checkout the target branch
     local current_branch
     current_branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "detached")
 
@@ -101,7 +101,7 @@ ensure_repo() {
          git -C "$dir" checkout "$branch" 2>/dev/null; then
         ok "$name switched to $branch"
       else
-        # Branch might not exist on origin — try fetching all and checking out
+        # Branch might not exist on origin -- try fetching all and checking out
         if git -C "$dir" fetch --all 2>/dev/null && \
            git -C "$dir" checkout "$branch" 2>/dev/null; then
           ok "$name switched to $branch (from remote)"
@@ -112,7 +112,7 @@ ensure_repo() {
       fi
     fi
   else
-    # Repo missing — clone it. Try the configured protocol first, then fall back.
+    # Repo missing -- clone it. Try the configured protocol first, then fall back.
     step "Clone $name from $url ($branch)"
     if _clone_with_fallback "$name" "$url" "$dir" "$branch"; then
       ok "$name cloned via $url"
@@ -148,7 +148,7 @@ _clone_with_fallback() {
       info "(cloned from $u)"
       return 0
     fi
-    # Branch missing on the primary ref — clone default then try to checkout
+    # Branch missing on the primary ref -- clone default then try to checkout
     if git clone "$u" "$dir" 2>/dev/null; then
       if git -C "$dir" checkout "$branch" 2>/dev/null; then
         info "(cloned from $u, then checked out $branch)"

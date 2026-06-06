@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stage 40 — frontend: npm install (with schema fetch from running backend), vite dev :5173
+# Stage 40 -- frontend: npm install (with schema fetch from running backend), vite dev :5173
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/log.sh
@@ -54,7 +54,7 @@ step "Verify generated TypeScript types exist"
 if [[ -f src/api/utilities/Definitions.d.ts ]]; then
   ok "Definitions.d.ts present ($(wc -c < src/api/utilities/Definitions.d.ts) bytes)"
 else
-  warn "Definitions.d.ts missing — openapi-tasks may have failed"
+  warn "Definitions.d.ts missing -- openapi-tasks may have failed"
   quirk "openapi-types" "Definitions.d.ts missing after npm install; check $FRONTEND_LOG"
 fi
 
