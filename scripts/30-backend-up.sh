@@ -335,8 +335,13 @@ if curl -s --max-time 3 http://localhost:8003 >/dev/null 2>&1; then
   if _setup_testuser_nextcloud; then
     ok "testuser Nextcloud + teams configured"
   else
-    fail "testuser Nextcloud setup failed (see $BACKEND_LOG)"
-    exit 1
+    # Best-effort: log a quirk and continue. The e2e suite's auth flow needs
+    # the testuser to exist, but a failure here usually means Nextcloud's
+    # OCS API isn't quite ready yet; the runserver below is what serves the
+    # app, and we want the stack to come up regardless. Quirk so the user
+    # notices in the e2e report.
+    warn "testuser Nextcloud setup failed (see $BACKEND_LOG) -- continuing"
+    quirk "nextcloud-testuser" "testuser Nextcloud setup failed; e2e login may not work"
   fi
 else
   skip "Nextcloud not reachable, skipping testuser Nextcloud setup"
