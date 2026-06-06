@@ -91,18 +91,12 @@ while (( SECONDS < STACK_TIMEOUT )); do
     "https://$DOMAIN/" 2>/dev/null || echo "000")
   LAST_CODE=$CODE
   case "$CODE" in
-    2*|3*|404)  # 404 is fine here: Vite SPA may not be ready; we just want a non-5xx
+    2*|3*|4*)  # 4xx counts as "Caddy is alive" -- the cert might be untrusted
+               # (staging LE) and a client without -k/ignoreHTTPSErrors would
+               # see 403. Real reachability of the upstream is checked in phase 2.
       PHASE1_OK=1
       ok "phase 1: HTTPS responded with $CODE after ${SECONDS}s"
       break
-      ;;
-    502)  # Caddy is up but upstream (Vite) isn't. Print install log tail every
-          # 90s so the user can see progress without flooding the console.
-      if (( SECONDS - LAST_502_LOG >= 90 )); then
-        warn "phase 1: still 502 after ${SECONDS}s; stack log tail:"
-        ssh_droplet 1 "tail -n 15 /var/log/colmena-install.log 2>/dev/null" || true
-        LAST_502_LOG=$SECONDS
-      fi
       ;;
   esac
   sleep 5

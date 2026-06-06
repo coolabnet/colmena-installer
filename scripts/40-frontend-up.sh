@@ -39,6 +39,33 @@ else
   warn "eslint reports issues (non-fatal)"
 fi
 
+# Vite >= 5 blocks any Host header that isn't localhost by default. When the
+# stack is fronted by Caddy (or any reverse proxy) the Host header is the
+# public domain, and Vite returns 403 "Blocked request. This host is not
+# allowed." Patch vite.config.* to add server.allowedHosts: true so the dev
+# server accepts any host. Idempotent.
+step "Patch vite.config to allow any host (Caddy reverse_proxy)"
+VITE_CFG="$FRONTEND_DIR/vite.config.ts"
+[[ ! -f "$VITE_CFG" ]] && VITE_CFG="$FRONTEND_DIR/vite.config.js"
+if [[ -f "$VITE_CFG" ]] && ! grep -q 'allowedHosts' "$VITE_CFG"; then
+  # Insert a `server: { allowedHosts: true }` block right after the defineConfig(
+  # opening. Use node to keep the config syntactically valid (top-level object
+  # spread would be brittle for a typescript config).
+  node -e "
+    const fs = require('fs');
+    const f = '$VITE_CFG';
+    let s = fs.readFileSync(f, 'utf8');
+    if (s.includes('allowedHosts')) { process.exit(0); }
+    // Find defineConfig({ ... }) and inject server block as the first key.
+    s = s.replace(/(defineConfig\s*\(\s*\{)/, '\$1\n  server: { allowedHosts: true },');
+    fs.writeFileSync(f, s);
+    console.log('  patched: added server.allowedHosts');
+  " 2>>"$FRONTEND_LOG" || warn "could not patch $VITE_CFG (non-fatal)"
+  ok "$VITE_CFG patched for Caddy host"
+else
+  ok "$VITE_CFG already has allowedHosts"
+fi
+
 step "npm install (triggers prepare -> openapi-tasks)"
 if [[ ! -d node_modules || ! -f node_modules/.package-lock.json ]]; then
   if npm install >>"$FRONTEND_LOG" 2>&1; then
