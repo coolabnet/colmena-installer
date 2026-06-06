@@ -84,6 +84,7 @@ log "Phase 1: stack readiness (https://$DOMAIN) up to ${STACK_TIMEOUT}s"
 SECONDS=0
 PHASE1_OK=0
 LAST_CODE="000"
+LAST_502_LOG=-90  # so the first 502 print happens immediately
 while (( SECONDS < STACK_TIMEOUT )); do
   CODE=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 \
     --resolve "$DOMAIN:443:$DROPLET_IP" \
@@ -97,9 +98,10 @@ while (( SECONDS < STACK_TIMEOUT )); do
       ;;
     502)  # Caddy is up but upstream (Vite) isn't. Print install log tail every
           # 90s so the user can see progress without flooding the console.
-      if (( SECONDS % 90 == 0 && SECONDS > 0 )); then
+      if (( SECONDS - LAST_502_LOG >= 90 )); then
         warn "phase 1: still 502 after ${SECONDS}s; stack log tail:"
         ssh_droplet 1 "tail -n 15 /var/log/colmena-install.log 2>/dev/null" || true
+        LAST_502_LOG=$SECONDS
       fi
       ;;
   esac
@@ -134,9 +136,12 @@ if [[ "$PHASE2_OK" != "1" ]]; then
 fi
 
 # ---- 5. Run Playwright e2e ----------------------------------------------------------------------------------------------------------
-log "Run Playwright e2e (PLAYWRIGHT_BASE_URL=https://$DOMAIN, COLMENA_SERVER_URL=https://$DOMAIN)"
+log "Run Playwright e2e (PLAYWRIGHT_BASE_URL=https://$DOMAIN, COLMENA_SERVER_URL=https://$DOMAIN, PLAYWRIGHT_DROPLET_IP=$DROPLET_IP)"
 export PLAYWRIGHT_BASE_URL="https://$DOMAIN"
 export COLMENA_SERVER_URL="https://$DOMAIN"
+# Bypass DNS in chromium too: map $DOMAIN -> $DROPLET_IP inside the browser's
+# resolver. Lets us run e2e before the A record has propagated.
+export PLAYWRIGHT_DROPLET_IP="$DROPLET_IP"
 
 cd "$WORKSPACE_ROOT/tests"
 if [[ ! -d node_modules ]]; then
@@ -156,51 +161,5 @@ else
   fail "playwright e2e FAILED (exit=$TC)"
   echo "  HTML report: $WORKSPACE_ROOT/tests/playwright-report/index.html"
   echo "  REMINDER: run 'terraform destroy' even on failure to drop the droplet."
-  exit $TC
-fi
-
-# ---- 3. Phase 2: wait for the API to report ok ------------------------------------------------------------------
-log "Phase 2: API readiness (https://$DOMAIN/api/status/) up to ${API_TIMEOUT}s"
-SECONDS=0
-PHASE2_OK=0
-while (( SECONDS < API_TIMEOUT )); do
-  BODY=$(curl -sk --max-time 5 \
-    --resolve "$DOMAIN:443:$DROPLET_IP" \
-    "https://$DOMAIN/api/status/" 2>/dev/null || true)
-  if [[ -n "$BODY" ]] && echo "$BODY" | jq -e '.backend.status == "ok"' >/dev/null 2>&1; then
-    PHASE2_OK=1
-    ok "phase 2: API reports ok after ${SECONDS}s"
-    break
-  fi
-  sleep 5
-done
-if [[ "$PHASE2_OK" != "1" ]]; then
-  fail "phase 2: API never reported ok after ${API_TIMEOUT}s (last body=$BODY)"
-  exit 1
-fi
-
-# ---- 4. Run Playwright e2e ----------------------------------------------------------------------------------------------------------
-log "Run Playwright e2e (PLAYWRIGHT_BASE_URL=https://$DOMAIN, COLMENA_SERVER_URL=https://$DOMAIN)"
-export PLAYWRIGHT_BASE_URL="https://$DOMAIN"
-export COLMENA_SERVER_URL="https://$DOMAIN"
-
-cd "$WORKSPACE_ROOT/tests"
-if [[ ! -d node_modules ]]; then
-  log "Install @playwright/test (one-time)"
-  npm install --no-save @playwright/test@1.48.0
-fi
-npx playwright test --reporter=line,html
-TC=$?
-if [[ $TC -eq 0 ]]; then
-  ok "playwright e2e PASSED"
-  echo
-  echo "  HTML report: $WORKSPACE_ROOT/tests/playwright-report/index.html"
-  echo
-  echo "  [reminder]  REMINDER: run 'terraform destroy' from $WORKSPACE_ROOT/terraform to drop the droplet (~\$6/mo)."
-  exit 0
-else
-  fail "playwright e2e FAILED (exit=$TC)"
-  echo "  HTML report: $WORKSPACE_ROOT/tests/playwright-report/index.html"
-  echo "  [reminder]  REMINDER: run 'terraform destroy' even on failure to drop the droplet (~\$6/mo)."
   exit $TC
 fi

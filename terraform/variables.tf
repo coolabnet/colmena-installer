@@ -16,9 +16,15 @@ variable "ssh_public_key_path" {
 }
 
 variable "ssh_key_name" {
-  description = "Name under which the public key is (or will be) registered in DigitalOcean. If a key with this name already exists in the account (typical for shared dev accounts), it is reused -- Terraform will not upload a duplicate."
+  description = "Name under which the public key is (or will be) registered in DigitalOcean. If lookup_existing_ssh_key is true and a key with this name already exists in the account (typical for shared dev accounts), it is reused -- Terraform will not upload a duplicate."
   type        = string
   default     = "colmena-installer"
+}
+
+variable "lookup_existing_ssh_key" {
+  description = "If true, look up ssh_key_name in the DO account before creating. Set to false on a fresh account where the data source would error (DO returns 404 not null on not-found). Defaults to true because the common case is a shared account that already has the key."
+  type        = bool
+  default     = true
 }
 
 variable "region" {
@@ -28,9 +34,9 @@ variable "region" {
 }
 
 variable "droplet_size" {
-  description = "DigitalOcean droplet size slug. s-1vcpu-1gb is ~$6/mo and adequate for the full Colmena stack."
+  description = "DigitalOcean droplet size slug. s-2vcpu-2gb is the recommended minimum: pyenv+Python 3.10 compile is single-threaded and saturates 1 vCPU for ~3 min, while Docker pulls and npm install are RAM-hungry. s-1vcpu-1gb OOMs or stalls under the combined load (verified empirically). See: https://docs.digitalocean.com/products/droplets/pricing/"
   type        = string
-  default     = "s-1vcpu-1gb"
+  default     = "s-2vcpu-2gb"
 }
 
 variable "droplet_image" {

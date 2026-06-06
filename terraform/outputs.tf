@@ -15,7 +15,7 @@ output "ssh_command" {
 
 output "destroy_reminder" {
   description = "Always-visible reminder to avoid ongoing charges."
-  value       = "When done, run 'terraform destroy' to drop the droplet and firewall (the domain and its A record are preserved)."
+  value       = "When done, run 'terraform destroy' to drop the droplet, firewall, and A record. The DO domain itself (colmena.luandro.com or whatever you configured) is preserved; only the A record that points at the droplet is removed."
 }
 
 output "e2e_command" {

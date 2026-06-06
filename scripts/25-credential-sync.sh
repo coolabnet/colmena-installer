@@ -44,6 +44,20 @@ CHANGED=0
 PRESERVED=0
 SKIPPED_HOSTNAME=0
 
+# Keys whose values must never be printed in plain text (passwords, tokens).
+# For these, the diff is shown as "X differs" rather than the actual values.
+SECRET_KEYS=(POSTGRES_PASSWORD)
+
+# Returns 0 if the key's value is secret and must be redacted.
+is_secret() {
+  local k="$1"
+  local s
+  for s in "${SECRET_KEYS[@]}"; do
+    [[ "$k" == "$s" ]] && return 0
+  done
+  return 1
+}
+
 sync_key() {
   local key="$1" new_val="$2"
   local cur_val=""
@@ -52,19 +66,33 @@ sync_key() {
   fi
   if [[ -n "$cur_val" && "$cur_val" != "$new_val" ]]; then
     if [[ "$PRESERVE" == "1" ]]; then
-      warn "$key differs (devops=$new_val, backend=$cur_val) -- preserved (BACKEND_ENV_PRESERVE=1)"
-      quirk "env-override" "$key: devops=$new_val, backend=$cur_val (preserved)"
+      if is_secret "$key"; then
+        warn "$key differs -- preserved (BACKEND_ENV_PRESERVE=1)"
+        quirk "env-override" "$key: values differ (preserved; values redacted)"
+      else
+        warn "$key differs (devops=$new_val, backend=$cur_val) -- preserved (BACKEND_ENV_PRESERVE=1)"
+        quirk "env-override" "$key: devops=$new_val, backend=$cur_val (preserved)"
+      fi
       PRESERVED=$((PRESERVED+1))
       return
     fi
-    warn "$key differs (devops=$new_val, backend=$cur_val) -- overriding"
-    quirk "env-override" "$key: backend=$cur_val -> $new_val"
+    if is_secret "$key"; then
+      warn "$key differs -- overriding"
+      quirk "env-override" "$key: values differ (overriding; values redacted)"
+    else
+      warn "$key differs (devops=$new_val, backend=$cur_val) -- overriding"
+      quirk "env-override" "$key: backend=$cur_val -> $new_val"
+    fi
     sed -i.bak "s|^${key}=.*|${key}=${new_val}|" "$BACKEND_DIR/.env"
     rm -f "$BACKEND_DIR/.env.bak"
     CHANGED=$((CHANGED+1))
   elif [[ -z "$cur_val" ]]; then
     echo "${key}=${new_val}" >> "$BACKEND_DIR/.env"
-    info "appended ${key}=${new_val}"
+    if is_secret "$key"; then
+      info "appended $key=<redacted>"
+    else
+      info "appended ${key}=${new_val}"
+    fi
     CHANGED=$((CHANGED+1))
   else
     ok "$key already in sync"

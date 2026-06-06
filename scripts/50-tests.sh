@@ -79,11 +79,10 @@ cd "$WORKSPACE_ROOT/tests" || exit 1
 # Run the spec
 npx playwright test --reporter=line,html >>"$LOG_DIR/playwright.log" 2>&1
 TC=$?
-if [[ $TC -eq 0 ]]; then
-  ok "playwright tests pass"
-else
-  fail "playwright tests failed (exit=$TC); see $LOG_DIR/playwright.log"
-fi
+# Persist the playwright exit code in a file so finish_stage's [[ $FAIL_COUNT -eq 0 ]]
+# check at the end doesn't overwrite it (finish_stage always returns 0/1 based on
+# the count, not on the test outcome).
+echo "$TC" > "$LOG_DIR/.playwright_exit"
 
 step "Playwright report"
 PW_REPORT="$WORKSPACE_ROOT/tests/playwright-report/index.html"
@@ -98,3 +97,5 @@ fi
 pkill -f "playwright.*show-report" 2>/dev/null || true
 
 finish_stage
+# Propagate the playwright exit code (not finish_stage's summary return).
+exit "$(cat "$LOG_DIR/.playwright_exit" 2>/dev/null || echo 0)"
