@@ -174,9 +174,9 @@ stage 30 "Backend: venv, install, db, server"
 cd "$BACKEND_DIR" || exit 1
 
 step "Set up Python 3.10.0 via pyenv"
-export PATH="/home/luandro/.pyenv/shims:/home/luandro/.pyenv/bin:$PATH"
-PY310=/home/luandro/.pyenv/shims/python3.10
-[[ -x "$PY310" ]] || { fail "python3.10 not on PATH"; exit 1; }
+export PATH="$HOME/.pyenv/shims:$HOME/.pyenv/bin:$PATH"
+PY310="$HOME/.pyenv/shims/python3.10"
+[[ -x "$PY310" ]] || { fail "python3.10 not on PATH ($PY310 missing)"; exit 1; }
 
 step "Ensure backend .env exists"
 if [[ ! -f .env && -f .env.example ]]; then

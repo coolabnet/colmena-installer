@@ -28,9 +28,9 @@ variable "region" {
 }
 
 variable "droplet_size" {
-  description = "DigitalOcean droplet size slug. s-2vcpu-2gb is the recommended minimum: pyenv+Python 3.10 compile is single-threaded and saturates 1 vCPU for ~3 min, while Docker pulls and npm install are RAM-hungry. s-1vcpu-1gb OOMs or stalls under the combined load (verified empirically). See: https://docs.digitalocean.com/products/droplets/pricing/"
+  description = "DigitalOcean droplet size slug. s-2vcpu-4gb is the recommended minimum: pyenv+Python 3.10 compile is single-threaded and saturates 1 vCPU for ~3 min, while Docker pulls and npm install are RAM-hungry. s-1vcpu-1gb OOMs; s-2vcpu-2gb OOM-kills Caddy under the combined load. 4 GB RAM keeps everything healthy. See: https://docs.digitalocean.com/products/droplets/pricing/"
   type        = string
-  default     = "s-2vcpu-2gb"
+  default     = "s-2vcpu-4gb"
 }
 
 variable "droplet_image" {
