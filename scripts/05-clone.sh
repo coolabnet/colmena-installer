@@ -10,7 +10,7 @@ STAGE_NAME="clone"
 
 stage 05 "Ensure repos are present"
 
-# ── Repo definitions ─────────────────────────────────────────────────────────
+# ---- Repo definitions ------------------------------------------------------------------------------------------------------------------
 # Each repo: FOLDER | GIT_URL | BRANCH
 # Defaults point to the fork (luandro/*) where the fix branches live.
 # Override to upstream origin if your branches are merged:
@@ -81,7 +81,7 @@ else
   fi
 fi
 
-# ── Helper: clone or verify a repo ───────────────────────────────────────────
+# ---- Helper: clone or verify a repo --------------------------------------------------------------------------------------
 ensure_repo() {
   local name="$1"
   local dir="$2"
@@ -174,7 +174,7 @@ _https_to_ssh() {
   fi
 }
 
-# ── Ensure each repo ─────────────────────────────────────────────────────────
+# ---- Ensure each repo ------------------------------------------------------------------------------------------------------------------
 CLONE_FAIL=0
 for name in backend frontend colmena-devops colmena-os; do
   IFS='|' read -r dir url branch <<< "${REPOS[$name]}"
@@ -183,7 +183,7 @@ for name in backend frontend colmena-devops colmena-os; do
   fi
 done
 
-# ── Summary ──────────────────────────────────────────────────────────────────
+# ---- Summary ------------------------------------------------------------------------------------------------------------------------------------
 if [[ $CLONE_FAIL -gt 0 ]]; then
   fail "$CLONE_FAIL repo(s) could not be prepared"
   finish_stage

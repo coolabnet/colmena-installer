@@ -26,9 +26,14 @@ ssh_key_name = "colmena-installer"
 # See: https://docs.digitalocean.com/platform/regional-availability/
 region = "nyc3"
 
-# Droplet size. s-1vcpu-1gb is the smallest with 1GB RAM and is adequate.
+# Droplet size. s-2vcpu-2gb is the recommended minimum: pyenv+Python 3.10
+# compilation is single-threaded and saturates 1 vCPU for ~3 min, while
+# docker pulls and npm install are RAM-hungry. s-1vcpu-1gb OOMs or stalls
+# under the combined load (verified empirically). 2 vCPU + 2 GB RAM keeps
+# the cloud-init within DO's 5-min budget and lets stage 30 finish
+# within a reasonable wait window.
 # See: https://docs.digitalocean.com/products/droplets/pricing/
-droplet_size = "s-1vcpu-1gb"
+droplet_size = "s-2vcpu-2gb"
 
 # OS image. Only Ubuntu 24.04 LTS is tested (the cloud-init is calibrated for it).
 droplet_image = "ubuntu-24-04-x64"

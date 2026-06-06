@@ -43,10 +43,10 @@ stage() {
   _log "  stage=$STAGE_NAME step=$n name=$name ts=$(ts)"
 }
 
-step() { printf '  %s•%s %s\n' "$C_DIM" "$C_RESET" "$*"; }
+step() { printf '  %s-%s %s\n' "$C_DIM" "$C_RESET" "$*"; }
 
-ok()   { printf '  %s✓%s %s\n' "$C_GREEN" "$C_RESET" "$*"; PASS_COUNT=$((PASS_COUNT+1)); }
-fail() { printf '  %s✗%s %s\n' "$C_RED" "$C_RESET" "$*"; FAIL_COUNT=$((FAIL_COUNT+1)); }
+ok()   { printf '  %s[ok]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; PASS_COUNT=$((PASS_COUNT+1)); }
+fail() { printf '  %sX%s %s\n' "$C_RED" "$C_RESET" "$*"; FAIL_COUNT=$((FAIL_COUNT+1)); }
 warn() { printf '  %s!%s %s\n' "$C_YELLOW" "$C_RESET" "$*"; }
 skip() { printf '  %s-%s %s\n' "$C_DIM" "$C_RESET" "$*"; SKIP_COUNT=$((SKIP_COUNT+1)); }
 info() { printf '    %s\n' "$*"; }

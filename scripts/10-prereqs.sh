@@ -30,7 +30,7 @@ _detect_pkg() {
 }
 PKG_MGR=$(_detect_pkg)
 
-# ── pyenv ────────────────────────────────────────────────────────────────────
+# ---- pyenv ----------------------------------------------------------------------------------------------------------------------------------------
 step "Check pyenv"
 PYENV_BIN="$HOME/.pyenv/bin/pyenv"
 if [[ -x "$PYENV_BIN" ]]; then
@@ -56,7 +56,7 @@ else
   fi
 fi
 
-# ── Python 3.10.0 (built by pyenv) ───────────────────────────────────────────
+# ---- Python 3.10.0 (built by pyenv) --------------------------------------------------------------------------------------
 step "Check Python 3.10.0"
 PY310_SHIM="$HOME/.pyenv/shims/python3.10"
 if [[ -x "$PY310_SHIM" ]] || $PYENV_BIN versions --bare 2>/dev/null | grep -q '^3\.10\.0$'; then
@@ -87,7 +87,7 @@ fi
 [[ -x "$PY310_SHIM" ]] || { fail "no shim for python3.10"; exit 1; }
 ok "python3.10 -> $($PY310_SHIM -V 2>&1)"
 
-# ── Node 20.x ────────────────────────────────────────────────────────────────
+# ---- Node 20.x --------------------------------------------------------------------------------------------------------------------------------
 step "Check node"
 NODE_BIN=$(command -v node || true)
 if [[ -n "$NODE_BIN" ]]; then
@@ -113,7 +113,7 @@ NPM_BIN=$(command -v npm || true)
 [[ -n "$NPM_BIN" ]] || { fail "npm missing"; exit 1; }
 ok "npm at $NPM_BIN ($($NPM_BIN -v))"
 
-# ── Docker (must be pre-installed by cloud-init; we only verify) ──────────────
+# ---- Docker (must be pre-installed by cloud-init; we only verify) ----------------------------
 step "Check docker"
 DOCKER_BIN=$(command -v docker || true)
 if [[ -n "$DOCKER_BIN" ]]; then
@@ -135,7 +135,7 @@ else
   exit 1
 fi
 
-# ── Dev tools (skip on droplet) ──────────────────────────────────────────────
+# ---- Dev tools (skip on droplet) --------------------------------------------------------------------------------------------
 if [[ "$SKIP_DEV_TOOLS" == "1" ]]; then
   skip "browser-harness (SKIP_DEV_TOOLS=1)"
   skip "playwright CLI (SKIP_DEV_TOOLS=1)"
