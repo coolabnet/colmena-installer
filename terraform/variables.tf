@@ -16,15 +16,9 @@ variable "ssh_public_key_path" {
 }
 
 variable "ssh_key_name" {
-  description = "Name under which the public key is (or will be) registered in DigitalOcean. If lookup_existing_ssh_key is true and a key with this name already exists in the account (typical for shared dev accounts), it is reused -- Terraform will not upload a duplicate."
+  description = "Name under which the public key is (or will be) registered in DigitalOcean. If a key with this name already exists in the account (typical for shared dev accounts), it is reused -- Terraform will not upload a duplicate. On a fresh account the key is created under this name."
   type        = string
   default     = "colmena-installer"
-}
-
-variable "lookup_existing_ssh_key" {
-  description = "If true, look up ssh_key_name in the DO account before creating. Set to false on a fresh account where the data source would error (DO returns 404 not null on not-found). Defaults to true because the common case is a shared account that already has the key."
-  type        = bool
-  default     = true
 }
 
 variable "region" {

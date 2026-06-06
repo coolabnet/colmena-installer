@@ -21,17 +21,20 @@ data "digitalocean_domain" "this" {
   name = var.domain_name
 }
 
-# Look up the SSH key by name. We use a variable gate (lookup_existing_key)
-# instead of `count = existing.id == null ? 1 : 0` because the
-# `digitalocean_ssh_key` data source errors at plan time when the name is not
-# found -- it does not return a null id. With the gate, a fresh account simply
-# skips the lookup and the resource below always creates the key.
-data "digitalocean_ssh_key" "existing" {
-  count = var.lookup_existing_ssh_key ? 1 : 0
-  name  = var.ssh_key_name
+# Find any existing SSH key with this name in the account. The plural data
+# source returns an empty list (not an error) when no key matches, so we can
+# branch cleanly: if length > 0, reuse the first one; otherwise create.
+data "digitalocean_ssh_keys" "by_name" {
+  filter {
+    key      = "name"
+    values   = [var.ssh_key_name]
+    match_by = "exact"
+  }
 }
 
 resource "digitalocean_ssh_key" "installer" {
+  count = length(data.digitalocean_ssh_keys.by_name.ssh_keys) == 0 ? 1 : 0
+
   name       = var.ssh_key_name
   public_key = file(local.ssh_public_key_path)
 }
@@ -46,8 +49,8 @@ resource "digitalocean_droplet" "colmena" {
 
   ssh_keys = [
     coalesce(
-      try(data.digitalocean_ssh_key.existing[0].id, null),
-      digitalocean_ssh_key.installer.id,
+      try(data.digitalocean_ssh_keys.by_name.ssh_keys[0].id, null),
+      try(digitalocean_ssh_key.installer[0].id, null),
     ),
   ]
 
