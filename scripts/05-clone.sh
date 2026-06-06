@@ -33,6 +33,29 @@ DEVOPS_BRANCH="${COLMENA_DEVOPS_BRANCH:-fix/nextcloud-docker-volume-build}"
 OS_URL="${COLMENA_OS_URL:-git@github.com:luandro/colmena-os.git}"
 OS_BRANCH="${COLMENA_OS_BRANCH:-main}"
 
+# HTTPS support for droplets / CI without SSH keys.
+# Set COLMENA_CLONE_PROTO=https to clone via https:// URLs instead of git@.
+# Override individual repo URLs via COLMENA_*_URL env vars (see above).
+COLMENA_CLONE_PROTO="${COLMENA_CLONE_PROTO:-ssh}"
+
+# Convert ssh URL -> https URL when requested. Idempotent on already-https URLs.
+_ssh_to_https() {
+  local url="$1"
+  # git@host:owner/repo.git  ->  https://host/owner/repo.git
+  if [[ "$url" =~ ^git@([^:]+):(.+)$ ]]; then
+    echo "https://${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+  else
+    echo "$url"
+  fi
+}
+
+if [[ "$COLMENA_CLONE_PROTO" == "https" ]]; then
+  BACKEND_URL="$(_ssh_to_https "$BACKEND_URL")"
+  FRONTEND_URL="$(_ssh_to_https "$FRONTEND_URL")"
+  DEVOPS_URL="$(_ssh_to_https "$DEVOPS_URL")"
+  OS_URL="$(_ssh_to_https "$OS_URL")"
+fi
+
 declare -A REPOS=(
   [backend]="$BACKEND_DIR|$BACKEND_URL|$BACKEND_BRANCH"
   [frontend]="$FRONTEND_DIR|$FRONTEND_URL|$FRONTEND_BRANCH"
@@ -47,8 +70,16 @@ ok "git at $GIT_BIN ($(git --version 2>&1))"
 
 step "Check ssh"
 SSH_BIN=$(command -v ssh || true)
-[[ -n "$SSH_BIN" ]] || { fail "ssh not found in PATH (needed for git@gitlab.com URLs)"; exit 1; }
-ok "ssh at $SSH_BIN"
+if [[ -n "$SSH_BIN" ]]; then
+  ok "ssh at $SSH_BIN"
+else
+  if [[ "$COLMENA_CLONE_PROTO" == "ssh" ]]; then
+    fail "ssh not found in PATH (needed for git@ URLs); set COLMENA_CLONE_PROTO=https"
+    exit 1
+  else
+    warn "ssh missing; COLMENA_CLONE_PROTO=https so it's not required"
+  fi
+fi
 
 # ── Helper: clone or verify a repo ───────────────────────────────────────────
 ensure_repo() {
@@ -81,24 +112,65 @@ ensure_repo() {
       fi
     fi
   else
-    # Repo missing — clone it
+    # Repo missing — clone it. Try the configured protocol first, then fall back.
     step "Clone $name from $url ($branch)"
-    if git clone --branch "$branch" "$url" "$dir" 2>/dev/null; then
-      ok "$name cloned ($branch)"
+    if _clone_with_fallback "$name" "$url" "$dir" "$branch"; then
+      ok "$name cloned via $url"
     else
-      # Target branch might not exist on origin — clone default then checkout
-      if git clone "$url" "$dir" 2>/dev/null; then
-        if git -C "$dir" checkout "$branch" 2>/dev/null; then
-          ok "$name cloned and switched to $branch"
-        else
-          warn "$name cloned but $branch not found (on $(git -C "$dir" rev-parse --abbrev-ref HEAD))"
-          quirk "branch-missing" "$name: $branch not found after clone"
-        fi
-      else
-        fail "$name: clone failed from $url"
-        return 1
-      fi
+      fail "$name: clone failed from $url (and fallback URL)"
+      return 1
     fi
+  fi
+}
+
+# Clone a repo, trying the configured protocol first and the other protocol as a
+# last-ditch fallback. Honors COLMENA_CLONE_PROTO for the "primary" choice.
+# Args: <name> <primary_url> <dir> <branch>
+_clone_with_fallback() {
+  local name="$1"
+  local primary_url="$2"
+  local dir="$3"
+  local branch="$4"
+
+  # Build the ordered list of URLs to try
+  local -a urls
+  urls=("$primary_url")
+  local alt
+  if [[ "$COLMENA_CLONE_PROTO" == "https" ]]; then
+    alt="$(_https_to_ssh "$primary_url")"
+  else
+    alt="$(_ssh_to_https "$primary_url")"
+  fi
+  [[ -n "$alt" && "$alt" != "$primary_url" ]] && urls+=("$alt")
+
+  for u in "${urls[@]}"; do
+    if git clone --branch "$branch" "$u" "$dir" 2>/dev/null; then
+      info "(cloned from $u)"
+      return 0
+    fi
+    # Branch missing on the primary ref — clone default then try to checkout
+    if git clone "$u" "$dir" 2>/dev/null; then
+      if git -C "$dir" checkout "$branch" 2>/dev/null; then
+        info "(cloned from $u, then checked out $branch)"
+        return 0
+      fi
+      warn "$name cloned from $u but $branch not found (on $(git -C "$dir" rev-parse --abbrev-ref HEAD))"
+      quirk "branch-missing" "$name: $branch not found after clone from $u"
+      return 0
+    fi
+    warn "clone attempt failed: $u"
+  done
+  return 1
+}
+
+# Convert https URL -> ssh URL. Returns empty on non-convertible URLs.
+_https_to_ssh() {
+  local url="$1"
+  # https://host/owner/repo.git  ->  git@host:owner/repo.git
+  if [[ "$url" =~ ^https?://([^/]+)/(.+)$ ]]; then
+    echo "git@${BASH_REMATCH[1]}:${BASH_REMATCH[2]}"
+  else
+    echo ""
   fi
 }
 

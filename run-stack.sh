@@ -2,19 +2,21 @@
 # run-stack.sh — one-shot orchestrator for the Colmena per-module stack
 #
 # Stages:
-#   05 clone      — ensure all repos are present (clone if missing, checkout branch)
-#   10 prereqs    — verify pyenv/python3.10/node/docker/playwright
-#   20 infra      — docker compose up Postgres, pgAdmin, Mailcrab, Nextcloud
-#   30 backend    — venv, install, db.create/migrate/seeds, server :8000
-#   40 frontend   — npm install, vite dev :5173
-#   50 tests      — backend tests, tsc, vite build, Playwright E2E
-#   90 teardown   — kill processes, docker compose down
+#   05 clone         — ensure all repos are present (clone if missing, checkout branch)
+#   10 prereqs       — verify (or install) pyenv/python3.10/node/docker/playwright
+#   20 infra         — docker compose up Postgres, pgAdmin, Mailcrab, Nextcloud
+#   25 credential-sync — reconcile devops .env credentials into backend .env
+#   30 backend       — venv, install, db.create/migrate/seeds, server :8000
+#   40 frontend      — npm install, vite dev :5173
+#   50 tests         — backend tests, tsc, vite build, Playwright E2E
+#   90 teardown      — kill processes, docker compose down
 #
 # Usage:
 #   bash run-stack.sh           # full run
-#   bash run-stack.sh up        # stages 10..40 only
+#   bash run-stack.sh up        # stages 05..40 only (no 25 to preserve manual control)
 #   bash run-stack.sh test      # stage 50 only (assumes stack is up)
 #   bash run-stack.sh down      # teardown only
+#   bash run-stack.sh droplet   # self-bootstrap on a cloud VM (05 10 20 25 30 40; no 50/90)
 #   bash run-stack.sh 30 40     # explicit stages
 #
 # Env overrides:
@@ -23,6 +25,10 @@
 #   DROPDB=1                    # teardown drops colmena_dev
 #   SKIP_NEXTCLOUD=1            # don't even try Nextcloud
 #   SKIP_PLAYWRIGHT=1           # skip stage 50 browser tests
+#   INSTALL_MISSING=1           # prereqs will install missing tools
+#   SKIP_DEV_TOOLS=1            # prereqs will skip browser-harness + playwright CLI
+#   STACK_MODE=droplet          # informational; consumed by stages
+#   COLMENA_CLONE_PROTO=https   # clone repos via HTTPS (no SSH keys needed)
 
 set -uo pipefail
 
@@ -50,6 +56,7 @@ declare -A STAGE_SCRIPTS=(
   [05]="$SCRIPT_DIR/scripts/05-clone.sh"
   [10]="$SCRIPT_DIR/scripts/10-prereqs.sh"
   [20]="$SCRIPT_DIR/scripts/20-infra-up.sh"
+  [25]="$SCRIPT_DIR/scripts/25-credential-sync.sh"
   [30]="$SCRIPT_DIR/scripts/30-backend-up.sh"
   [40]="$SCRIPT_DIR/scripts/40-frontend-up.sh"
   [50]="$SCRIPT_DIR/scripts/50-tests.sh"
@@ -61,10 +68,19 @@ ALL="${ALL:-0}"
 STAGES=()
 case "${1:-}" in
   "")
-    STAGES=(05 10 20 30 40 50 90)
+    STAGES=(05 10 20 25 30 40 50 90)
     ;;
   up)
-    STAGES=(05 10 20 30 40)
+    STAGES=(05 10 20 25 30 40)
+    shift
+    ;;
+  droplet)
+    # Self-bootstrap mode for a fresh cloud VM (e2e runs from the local machine).
+    # Installs missing toolchain, skips dev-only checks, no local teardown at the end.
+    export INSTALL_MISSING="${INSTALL_MISSING:-1}"
+    export SKIP_DEV_TOOLS="${SKIP_DEV_TOOLS:-1}"
+    export STACK_MODE=droplet
+    STAGES=(05 10 20 25 30 40)
     shift
     ;;
   test)
@@ -82,7 +98,7 @@ case "${1:-}" in
   --all)
     ALL=1
     shift
-    STAGES=(05 10 20 30 40 50 90)
+    STAGES=(05 10 20 25 30 40 50 90)
     ;;
   *)
     for arg in "$@"; do

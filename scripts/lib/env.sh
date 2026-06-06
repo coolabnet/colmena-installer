@@ -26,10 +26,10 @@ FRONTEND_LOG="$LOG_DIR/frontend.log"
 INFRA_LOG="$LOG_DIR/infra.log"
 PREREQ_LOG="$LOG_DIR/prereqs.log"
 
-# pyenv-managed Python
-export PATH="/home/luandro/.pyenv/shims:/home/luandro/.pyenv/bin:$PATH"
-# Homebrew linuxbrew (used for python build headers; harmless at runtime)
-export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
+# pyenv-managed Python (prepend only when present — supports droplets & CI)
+if [[ -d "$HOME/.pyenv/shims" ]]; then
+  export PATH="$HOME/.pyenv/shims:$HOME/.pyenv/bin:$PATH"
+fi
 
 # Load backend .env into the current shell (manage.py does NOT do this; the Makefile does)
 load_backend_env() {

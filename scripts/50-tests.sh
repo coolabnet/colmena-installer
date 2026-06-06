@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Stage 50 — tests: backend pytest, frontend type check, browser e2e (Playwright)
+#
+# Mode detection: if PLAYWRIGHT_BASE_URL starts with https://, treat this as a
+# remote/droplet run — skip backend test re-run, tsc, and vite build (those run
+# on the droplet itself). Only run Playwright against the remote URL.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/log.sh
@@ -10,35 +14,47 @@ STAGE_NAME="tests"
 
 stage 50 "Tests: backend + frontend + E2E"
 
-step "Backend Django test suite (re-run via Makefile for parity)"
-cd "$BACKEND_DIR" || exit 1
-# shellcheck disable=SC1091
-source venv/bin/activate
-make test >>"$LOG_DIR/backend-test.log" 2>&1
-TC=$?
-if [[ $TC -eq 0 ]]; then
-  ok "backend tests pass"
-else
-  fail "backend tests failed (exit=$TC); see $LOG_DIR/backend-test.log"
+REMOTE=0
+if [[ "${PLAYWRIGHT_BASE_URL:-}" =~ ^https:// ]]; then
+  REMOTE=1
 fi
+info "mode=$([[ $REMOTE == 1 ]] && echo 'remote' || echo 'local') (PLAYWRIGHT_BASE_URL=${PLAYWRIGHT_BASE_URL:-<unset>})"
 
-step "Frontend type check (tsc --noEmit)"
-cd "$FRONTEND_DIR" || exit 1
-if timeout 90 npx tsc --noEmit >>"$FRONTEND_LOG" 2>&1; then
-  ok "tsc clean"
-else
-  warn "tsc reports errors or timed out (90s); see $FRONTEND_LOG"
-fi
-
-step "Build frontend (production bundle, slow ~45s)"
-if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
-  if timeout 120 npm run build >>"$FRONTEND_LOG" 2>&1; then
-    ok "vite build completed"
+if [[ $REMOTE -eq 0 ]]; then
+  step "Backend Django test suite (re-run via Makefile for parity)"
+  cd "$BACKEND_DIR" || exit 1
+  # shellcheck disable=SC1091
+  source venv/bin/activate
+  make test >>"$LOG_DIR/backend-test.log" 2>&1
+  TC=$?
+  if [[ $TC -eq 0 ]]; then
+    ok "backend tests pass"
   else
-    warn "vite build had warnings or timed out (120s); see $FRONTEND_LOG"
+    fail "backend tests failed (exit=$TC); see $LOG_DIR/backend-test.log"
+  fi
+
+  step "Frontend type check (tsc --noEmit)"
+  cd "$FRONTEND_DIR" || exit 1
+  if timeout 90 npx tsc --noEmit >>"$FRONTEND_LOG" 2>&1; then
+    ok "tsc clean"
+  else
+    warn "tsc reports errors or timed out (90s); see $FRONTEND_LOG"
+  fi
+
+  step "Build frontend (production bundle, slow ~45s)"
+  if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
+    if timeout 120 npm run build >>"$FRONTEND_LOG" 2>&1; then
+      ok "vite build completed"
+    else
+      warn "vite build had warnings or timed out (120s); see $FRONTEND_LOG"
+    fi
+  else
+    skip "vite build (SKIP_BUILD=1)"
   fi
 else
-  skip "vite build (SKIP_BUILD=1)"
+  skip "backend test suite (remote mode — ran on droplet)"
+  skip "frontend tsc check (remote mode — ran on droplet)"
+  skip "vite build (remote mode — ran on droplet)"
 fi
 
 step "Playwright E2E"

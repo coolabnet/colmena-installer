@@ -1,0 +1,92 @@
+#cloud-config
+# Colmena installer cloud-init -- runs once on first boot, then never again.
+# This script is intentionally short: only system packages + Docker + Caddy.
+# The full stack (pyenv, Python 3.10, Node, repos, backend, frontend) is bootstrapped
+# in the background by run-stack.sh's "droplet" mode, which avoids the 5-minute
+# cloud-init timeout that DO enforces.
+
+write_files:
+  - path: /etc/caddy/Caddyfile
+    permissions: "0644"
+    owner: root:root
+    content: |
+      ${domain} {
+          %{ if letsencrypt_staging ~}
+          tls {
+              ca https://acme-staging-v02.api.letsencrypt.org/directory
+          }
+          %{ endif ~}
+          # /api/* goes to Django on :8000; everything else goes to Vite on :5173.
+          reverse_proxy /api/* localhost:8000
+          reverse_proxy localhost:5173
+      }
+  - path: /opt/colmena/start-stack.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -uo pipefail
+      export COLMENA_CLONE_PROTO=https
+      export INSTALL_MISSING=1
+      export SKIP_DEV_TOOLS=1
+      export STACK_MODE=droplet
+      cd /root/colmena-installer
+      exec bash run-stack.sh droplet
+
+apt:
+  preserve_sources_list: true
+  sources: {}
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - git
+  - curl
+  - wget
+  - build-essential
+  - libssl-dev
+  - zlib1g-dev
+  - libbz2-dev
+  - libreadline-dev
+  - libsqlite3-dev
+  - libffi-dev
+  - liblzma-dev
+  - ca-certificates
+  - gnupg
+  - lsb-release
+  - apt-transport-https
+  - uidmap
+
+runcmd:
+  # --- Docker (official repo, not Ubuntu's older docker.io) ---
+  - install -m 0755 -d /usr/share/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+  - >-
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+    > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+  # --- Node 20.x via NodeSource ---
+  - curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  - apt-get install -y --no-install-recommends nodejs
+
+  # --- Caddy (Cloudsmith repo) ---
+  - curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  - curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
+  - apt-get update
+  # DEBIAN_FRONTEND=noninteractive + --force-confold keeps our Caddyfile (written above
+  # by write_files) when the caddy package's default Caddyfile would otherwise prompt.
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" caddy
+
+  - systemctl enable --now caddy
+  - systemctl restart caddy
+
+  # --- Clone the installer (public repo) and run the stack in the background. ---
+  - git clone https://github.com/coolabnet/colmena-installer.git /root/colmena-installer
+  - chmod +x /opt/colmena/start-stack.sh
+  # runcmd runs under /bin/sh; 'disown' is a bash builtin, so just background with nohup.
+  - 'nohup /opt/colmena/start-stack.sh >/var/log/colmena-install.log 2>&1 </dev/null &'
+
+final_message: "Colmena droplet cloud-init complete; full stack bootstrapping in background (see /var/log/colmena-install.log)."

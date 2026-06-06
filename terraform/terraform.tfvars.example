@@ -1,0 +1,40 @@
+# Copy this file to terraform.tfvars and fill in real values.
+# terraform.tfvars is .gitignore'd -- never commit secrets.
+
+# DigitalOcean API token (Settings -> API -> Tokens/Write).
+# Treated as sensitive: TF will mask it in plan/apply output.
+do_token = "dop_v1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# A domain you have already added to DigitalOcean, with its nameservers delegated to DO.
+# The A record will be created (or updated) to point at the new droplet.
+# Terraform will refuse to plan if the domain is not in your DO account.
+domain_name = "example.colmena.network"
+
+# Local path to the SSH public key to install on the droplet.
+# The matching private key is used to SSH in as root.
+# Default: ~/.ssh/id_rsa.pub
+ssh_public_key_path = "~/.ssh/id_rsa.pub"
+
+# Name under which the public key is (or will be) registered in DigitalOcean.
+# If a key with this name already exists in your account, it is reused --
+# Terraform will not try to upload a duplicate. Set this to the existing
+# key's name (whatever you called it when you uploaded it via the DO UI).
+# Default: colmena-installer
+ssh_key_name = "colmena-installer"
+
+# Region slug. Cheap/common choices: nyc3, sfo3, fra1, blr1, sgp1.
+# See: https://docs.digitalocean.com/platform/regional-availability/
+region = "nyc3"
+
+# Droplet size. s-1vcpu-1gb is the smallest with 1GB RAM and is adequate.
+# See: https://docs.digitalocean.com/products/droplets/pricing/
+droplet_size = "s-1vcpu-1gb"
+
+# OS image. Only Ubuntu 24.04 LTS is tested (the cloud-init is calibrated for it).
+droplet_image = "ubuntu-24-04-x64"
+
+# Let's Encrypt mode.
+#   true  -> staging CA; no rate limits but the cert is untrusted by browsers.
+#            Use this for development and repeated teardown/apply cycles.
+#   false -> production CA; real cert, but you may hit rate limits on rapid cycling.
+letsencrypt_staging = true

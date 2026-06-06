@@ -1,5 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
 
+const serverUrl = process.env.COLMENA_SERVER_URL || 'http://localhost:8000';
+
 // Helpers for React-controlled inputs
 async function setReactInputValue(page: Page, selector: string, value: string) {
   await page.locator(selector).evaluate((el, v) => {
@@ -32,7 +34,7 @@ async function loginAsTestUser(page: Page) {
   await expect(page.locator('#server_name_text_input')).toBeVisible({ timeout: 10_000 });
 
   await setReactInputValue(page, '#server_name_text_input', 'Local Backend');
-  await setReactInputValue(page, '#server_address_text_input', 'http://localhost:8000');
+  await setReactInputValue(page, '#server_address_text_input', serverUrl);
 
   await page.getByRole('button', { name: /^Confirm$/i }).click();
   await expect(page.locator('text=/server is saved correctly/i')).toBeVisible({ timeout: 10_000 });
@@ -183,7 +185,7 @@ test.describe('Colmena end-to-end', () => {
     await expect(page.locator('#server_name_text_input')).toBeVisible({ timeout: 10_000 });
 
     await setReactInputValue(page, '#server_name_text_input', 'Local Backend');
-    await setReactInputValue(page, '#server_address_text_input', 'http://localhost:8000');
+    await setReactInputValue(page, '#server_address_text_input', serverUrl);
 
     // The actual button text is "Confirm" (not "Save")
     await page.getByRole('button', { name: /^Confirm$/i }).click();
@@ -272,10 +274,10 @@ test.describe('Colmena end-to-end', () => {
 
   test('API call from the browser returns backend status', async ({ page }) => {
     await page.goto('/');
-    const status = await page.evaluate(async () => {
-      const r = await fetch('http://localhost:8000/api/status/');
+    const status = await page.evaluate(async (url) => {
+      const r = await fetch(`${url}/api/status/`);
       return r.json();
-    });
+    }, serverUrl);
     expect(status.backend.status).toBe('ok');
   });
 
@@ -315,14 +317,14 @@ test.describe('Colmena end-to-end', () => {
     await loginAsTestUser(page);
 
     // Get the personal workspace team ID from the API
-    const teams = await page.evaluate(async () => {
+    const teams = await page.evaluate(async (url) => {
       const user = JSON.parse(localStorage.getItem('user') || '{}');
       const token = user.access;
-      const r = await fetch('http://localhost:8000/api/teams/', {
+      const r = await fetch(`${url}/api/teams/`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       return r.json();
-    });
+    }, serverUrl);
 
     // Find the personal workspace
     const personalWorkspace = teams.find((t: { is_personal_workspace: boolean }) => t.is_personal_workspace);

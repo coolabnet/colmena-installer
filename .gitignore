@@ -31,3 +31,16 @@ email_update.md
 # OS
 .DS_Store
 Thumbs.db
+
+# Terraform (lock file IS committed; state and secrets are not)
+terraform/.terraform/
+terraform/terraform.tfvars
+terraform/terraform.tfstate
+terraform/terraform.tfstate.*
+terraform/terraform.tfstate.backup
+terraform/crash.log
+terraform/crash.*.log
+terraform/*.tfplan
+
+# Workspace-internal planning docs (not part of the installer)
+plans/
