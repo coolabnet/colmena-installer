@@ -5,8 +5,20 @@ variable "do_token" {
 }
 
 variable "domain_name" {
-  description = "A domain already added to DigitalOcean (nameservers delegated to DO). Used for the A record pointing at the droplet."
+  description = "The base domain registered in DigitalOcean (e.g. 'luandro.com'). Subdomains for frontend and API are created under this domain."
   type        = string
+}
+
+variable "frontend_subdomain" {
+  description = "Subdomain for the frontend (e.g. 'colmena' gives colmena.luandro.com)."
+  type        = string
+  default     = "colmena"
+}
+
+variable "api_subdomain" {
+  description = "Subdomain for the API server (e.g. 'colmena-api' gives colmena-api.luandro.com)."
+  type        = string
+  default     = "colmena-api"
 }
 
 variable "ssh_public_key_path" {
@@ -40,7 +52,7 @@ variable "droplet_image" {
 }
 
 variable "letsencrypt_staging" {
-  description = "If true, Caddy uses the Let's Encrypt staging CA (no rate-limit lockout during dev). Set to false for a real cert."
+  description = "If true, Caddy uses the Let's Encrypt staging CA (untrusted by browsers). Set to false for a real, browser-trusted cert."
   type        = bool
-  default     = true
+  default     = false
 }

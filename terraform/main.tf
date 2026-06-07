@@ -56,17 +56,28 @@ resource "digitalocean_droplet" "colmena" {
 
   user_data = templatefile("${path.module}/cloud-init.yaml", {
     domain              = var.domain_name
+    frontend_subdomain  = var.frontend_subdomain
+    api_subdomain       = var.api_subdomain
     letsencrypt_staging = var.letsencrypt_staging
   })
 
   tags = ["colmena", "installer", "terraform"]
 }
 
-# A record for the bare domain. www is intentionally not created (Caddy serves both via Host header).
-resource "digitalocean_record" "apex_a" {
+# A record for the frontend subdomain (e.g. colmena.luandro.com).
+resource "digitalocean_record" "frontend_a" {
   domain = data.digitalocean_domain.this.id
   type   = "A"
-  name   = "@"
+  name   = var.frontend_subdomain
+  value  = digitalocean_droplet.colmena.ipv4_address
+  ttl    = 300
+}
+
+# A record for the API subdomain (e.g. colmena-api.luandro.com).
+resource "digitalocean_record" "api_a" {
+  domain = data.digitalocean_domain.this.id
+  type   = "A"
+  name   = var.api_subdomain
   value  = digitalocean_droplet.colmena.ipv4_address
   ttl    = 300
 }

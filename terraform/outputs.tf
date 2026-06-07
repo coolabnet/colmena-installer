@@ -4,8 +4,13 @@ output "droplet_ip" {
 }
 
 output "url" {
-  description = "HTTPS URL of the deployed stack, served by Caddy with a Let's Encrypt certificate."
-  value       = "https://${var.domain_name}"
+  description = "HTTPS URL of the frontend."
+  value       = "https://${var.frontend_subdomain}.${var.domain_name}"
+}
+
+output "api_url" {
+  description = "HTTPS URL of the API server."
+  value       = "https://${var.api_subdomain}.${var.domain_name}"
 }
 
 output "ssh_command" {
@@ -15,10 +20,10 @@ output "ssh_command" {
 
 output "destroy_reminder" {
   description = "Always-visible reminder to avoid ongoing charges."
-  value       = "When done, run 'terraform destroy' to drop the droplet, firewall, and A record. The DO domain itself (colmena.luandro.com or whatever you configured) is preserved; only the A record that points at the droplet is removed."
+  value       = "When done, run 'terraform destroy' to drop the droplet, firewall, and DNS records. The DO domain itself is preserved; only the A records are removed."
 }
 
 output "e2e_command" {
   description = "One-shot command to wait for the stack to be ready and run the Playwright e2e suite from the local machine."
-  value       = "COLMENA_DOMAIN=${var.domain_name} bash scripts/wait-and-test.sh"
+  value       = "COLMENA_DOMAIN=${var.frontend_subdomain}.${var.domain_name} bash scripts/wait-and-test.sh"
 }

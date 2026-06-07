@@ -10,20 +10,25 @@ write_files:
     permissions: "0644"
     owner: root:root
     content: |
-      ${domain} {
-          %{ if letsencrypt_staging ~}
+      ${frontend_subdomain}.${domain} {
+      %{ if letsencrypt_staging ~}
           tls {
               ca https://acme-staging-v02.api.letsencrypt.org/directory
           }
-          %{ endif ~}
-          # /api/* goes to Django on :8000
-          handle /api/* {
-              reverse_proxy localhost:8000
-          }
-          # Everything else: Vite dev on :5173 (stage 40 replaces this with static files)
+      %{ endif ~}
+          # Everything: serve production frontend (stage 40 patches the handle block)
           handle {
               reverse_proxy localhost:5173
           }
+      }
+      ${api_subdomain}.${domain} {
+      %{ if letsencrypt_staging ~}
+          tls {
+              ca https://acme-staging-v02.api.letsencrypt.org/directory
+          }
+      %{ endif ~}
+          # API: proxy all requests to Django on :8000
+          reverse_proxy localhost:8000
       }
   - path: /opt/colmena/start-stack.sh
     permissions: "0755"
@@ -35,8 +40,8 @@ write_files:
       export INSTALL_MISSING=1
       export SKIP_DEV_TOOLS=1
       export STACK_MODE=droplet
-      export BACKEND_HOSTNAME=${domain}
-      export FRONTEND_HOSTNAME=${domain}
+      export BACKEND_HOSTNAME=${api_subdomain}.${domain}
+      export FRONTEND_HOSTNAME=${frontend_subdomain}.${domain}
       cd /root/colmena-installer
       exec bash run-stack.sh droplet
 
