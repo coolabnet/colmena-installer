@@ -119,9 +119,10 @@ if [[ "${STACK_MODE:-local}" == "droplet" ]]; then
     node -e "
       const fs = require('fs');
       let c = fs.readFileSync('$CADDYFILE', 'utf8');
-      // Replace the catch-all handle block (reverse_proxy to Vite) with static serving
+      // Replace the catch-all handle block (reverse_proxy to Vite) with static serving.
+      // Keep the /api/* handle block intact. Use [\\s\\S] to match across newlines.
       c = c.replace(
-        /handle\\s*\\{[^}]*reverse_proxy\\s+localhost:\\$FRONTEND_PORT[^}]*\\}/,
+        /handle\\s*\\{[\\s\\S]*?reverse_proxy\\s+localhost:$FRONTEND_PORT[\\s\\S]*?\\}/,
         'handle {\\n        root * $STATIC_DIR\\n        try_files {path} /index.html\\n        file_server\\n    }'
       );
       fs.writeFileSync('$CADDYFILE', c);
