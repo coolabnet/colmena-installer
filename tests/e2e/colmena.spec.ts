@@ -28,7 +28,9 @@ async function waitForSpaMount(page: Page) {
   }, { timeout: 30_000 }).catch(() => {});
   // Extra wait for React hydration to complete — Vite module transforms on a
   // remote droplet can be extremely slow (5-30s per module graph).
-  await page.waitForTimeout(5000);
+  // 10s gives enough headroom for the full React + PatternFly + router stack
+  // to initialize on a 2-CPU droplet serving Vite dev mode.
+  await page.waitForTimeout(10_000);
 }
 
 // Full login flow: register server -> connect -> login -> reach /home
@@ -255,7 +257,6 @@ test.describe('Colmena end-to-end', () => {
   });
 
   test('hamburger menu opens and expands', async ({ page }) => {
-    test.setTimeout(120_000);
     await loginAsTestUser(page);
 
     // Wait for the home page to be fully rendered
@@ -309,7 +310,6 @@ test.describe('Colmena end-to-end', () => {
   });
 
   test('My Space page loads with personal workspace after login', async ({ page }) => {
-    test.setTimeout(180_000);
     await loginAsTestUser(page);
 
     // Get the personal workspace team ID from the API
@@ -343,7 +343,6 @@ test.describe('Colmena end-to-end', () => {
   });
 
   test('Record audio and open upload modal', async ({ page }) => {
-    test.setTimeout(120_000);
     await loginAsTestUser(page);
     await recordAndStop(page);
 
