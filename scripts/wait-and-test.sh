@@ -108,14 +108,21 @@ if [[ "$PHASE1_OK" != "1" ]]; then
 fi
 
 # ---- 4. Phase 2: wait for the API to report ok ------------------------------------------------------------------
-log "Phase 2: API readiness (https://$DOMAIN/api/status/) up to ${API_TIMEOUT}s"
+# The API lives on its own subdomain (colmena-api.luandro.com). Derive it from terraform.
+API_DOMAIN=$(terraform -chdir="$WORKSPACE_ROOT/terraform" output -json 2>/dev/null \
+  | jq -r '.api_url.value // ""' 2>/dev/null | sed 's|https://||' || true)
+if [[ -z "$API_DOMAIN" ]]; then
+  # Fallback: assume /api/ is on the same domain as the frontend
+  API_DOMAIN="$DOMAIN"
+fi
+log "Phase 2: API readiness (https://$API_DOMAIN/api/status/) up to ${API_TIMEOUT}s"
 SECONDS=0
 PHASE2_OK=0
 LAST_BODY=""
 while (( SECONDS < API_TIMEOUT )); do
   BODY=$(curl -sk --max-time 5 \
-    --resolve "$DOMAIN:443:$DROPLET_IP" \
-    "https://$DOMAIN/api/status/" 2>/dev/null || true)
+    --resolve "$API_DOMAIN:443:$DROPLET_IP" \
+    "https://$API_DOMAIN/api/status/" 2>/dev/null || true)
   LAST_BODY=$BODY
   if [[ -n "$BODY" ]] && echo "$BODY" | jq -e '.backend.status == "ok"' >/dev/null 2>&1; then
     PHASE2_OK=1
@@ -130,9 +137,12 @@ if [[ "$PHASE2_OK" != "1" ]]; then
 fi
 
 # ---- 5. Run Playwright e2e ----------------------------------------------------------------------------------------------------------
-log "Run Playwright e2e (PLAYWRIGHT_BASE_URL=https://$DOMAIN, COLMENA_SERVER_URL=https://$DOMAIN, PLAYWRIGHT_DROPLET_IP=$DROPLET_IP)"
+# Derive the API URL from terraform output (or fall back to the frontend domain).
+API_URL=$(terraform -chdir="$WORKSPACE_ROOT/terraform" output -json 2>/dev/null \
+  | jq -r '.api_url.value // "https://$DOMAIN"' 2>/dev/null || echo "https://$DOMAIN")
+log "Run Playwright e2e (PLAYWRIGHT_BASE_URL=https://$DOMAIN, COLMENA_SERVER_URL=$API_URL, PLAYWRIGHT_DROPLET_IP=$DROPLET_IP)"
 export PLAYWRIGHT_BASE_URL="https://$DOMAIN"
-export COLMENA_SERVER_URL="https://$DOMAIN"
+export COLMENA_SERVER_URL="$API_URL"
 # Bypass DNS in chromium too: map $DOMAIN -> $DROPLET_IP inside the browser's
 # resolver. Lets us run e2e before the A record has propagated.
 export PLAYWRIGHT_DROPLET_IP="$DROPLET_IP"

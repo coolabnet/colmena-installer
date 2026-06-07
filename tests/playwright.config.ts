@@ -38,7 +38,14 @@ export default defineConfig({
             // yet propagated, map the domain directly to the droplet's IP.
             // PLAYWRIGHT_DROPLET_IP is set by scripts/wait-and-test.sh.
             ...(process.env.PLAYWRIGHT_DROPLET_IP
-              ? [`--host-resolver-rules=MAP ${process.env.PLAYWRIGHT_BASE_URL?.replace(/^https?:\/\//, '').split('/')[0] || ''} ${process.env.PLAYWRIGHT_DROPLET_IP}`]
+              ? (() => {
+                  const rules: string[] = [];
+                  const fe = process.env.PLAYWRIGHT_BASE_URL?.replace(/^https?:\/\//, '').split('/')[0];
+                  if (fe) rules.push(`MAP ${fe} ${process.env.PLAYWRIGHT_DROPLET_IP}`);
+                  const api = process.env.COLMENA_SERVER_URL?.replace(/^https?:\/\//, '').split('/')[0];
+                  if (api && api !== fe) rules.push(`MAP ${api} ${process.env.PLAYWRIGHT_DROPLET_IP}`);
+                  return rules.length ? [`--host-resolver-rules=${rules.join(',')}`] : [];
+                })()
               : []),
           ],
         },
