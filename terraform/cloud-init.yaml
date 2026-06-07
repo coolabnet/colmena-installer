@@ -16,7 +16,11 @@ write_files:
               ca https://acme-staging-v02.api.letsencrypt.org/directory
           }
       %{ endif ~}
-          # Everything: serve production frontend (stage 40 patches the handle block)
+          # /api/* goes to Django (same-origin avoids CORS issues)
+          handle /api/* {
+              reverse_proxy localhost:8000
+          }
+          # Everything else: serve production frontend (stage 40 patches this handle)
           handle {
               reverse_proxy localhost:5173
           }
