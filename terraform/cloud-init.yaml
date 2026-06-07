@@ -16,9 +16,14 @@ write_files:
               ca https://acme-staging-v02.api.letsencrypt.org/directory
           }
           %{ endif ~}
-          # /api/* goes to Django on :8000; everything else goes to Vite on :5173.
-          reverse_proxy /api/* localhost:8000
-          reverse_proxy localhost:5173
+          # /api/* goes to Django on :8000
+          handle /api/* {
+              reverse_proxy localhost:8000
+          }
+          # Everything else: Vite dev on :5173 (stage 40 replaces this with static files)
+          handle {
+              reverse_proxy localhost:5173
+          }
       }
   - path: /opt/colmena/start-stack.sh
     permissions: "0755"
@@ -30,6 +35,8 @@ write_files:
       export INSTALL_MISSING=1
       export SKIP_DEV_TOOLS=1
       export STACK_MODE=droplet
+      export BACKEND_HOSTNAME=${domain}
+      export FRONTEND_HOSTNAME=${domain}
       cd /root/colmena-installer
       exec bash run-stack.sh droplet
 

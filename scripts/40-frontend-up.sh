@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Stage 40 -- frontend: npm install (with schema fetch from running backend), vite dev :5173
+# Stage 40 -- frontend: npm install (with schema fetch from running backend), then
+#   - local mode:  vite dev server on :5173
+#   - droplet mode: production build served by Caddy (no Vite dev server)
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/log.sh
@@ -67,6 +69,10 @@ else
 fi
 
 step "npm install (triggers prepare -> openapi-tasks)"
+# Export OPENAPI_SCHEMA_LOCATION so the prepare hook's openapi-tasks can find
+# the running backend. The .env file was patched above, but npm doesn't source
+# it — only the Makefile does.
+export OPENAPI_SCHEMA_LOCATION="http://localhost:$BACKEND_PORT/api/schema/"
 if [[ ! -d node_modules || ! -f node_modules/.package-lock.json ]]; then
   if npm install >>"$FRONTEND_LOG" 2>&1; then
     ok "npm install completed"
@@ -85,28 +91,71 @@ else
   quirk "openapi-types" "Definitions.d.ts missing after npm install; check $FRONTEND_LOG"
 fi
 
-step "Start Vite dev :$FRONTEND_PORT"
-if (echo > "/dev/tcp/127.0.0.1/$FRONTEND_PORT") 2>/dev/null; then
-  warn "port $FRONTEND_PORT busy; killing prior listener"
-  lsof -ti tcp:"$FRONTEND_PORT" 2>/dev/null | xargs -r kill -9 2>/dev/null || true
-  sleep 1
-fi
-setsid nohup npm run dev -- --port "$FRONTEND_PORT" --host "::" >>"$FRONTEND_LOG" 2>&1 </dev/null & disown
-sleep 3
+if [[ "${STACK_MODE:-local}" == "droplet" ]]; then
+  # ── Droplet mode: production build, served by Caddy ──
+  step "Production build (STACK_MODE=droplet)"
+  if npm run build >>"$FRONTEND_LOG" 2>&1; then
+    ok "npm run build completed"
+  else
+    fail "npm run build failed; see $FRONTEND_LOG"
+    tail -30 "$FRONTEND_LOG"
+  fi
 
-if wait_for_url "http://localhost:$FRONTEND_PORT/" 20 200; then
-  ok "frontend up on :$FRONTEND_PORT (note: Vite binds IPv6 localhost)"
-else
-  fail "frontend did not respond on :$FRONTEND_PORT; see $FRONTEND_LOG"
-  tail -30 "$FRONTEND_LOG"
-fi
+  if [[ -d dist ]]; then
+    ok "dist/ directory present ($(du -sh dist | cut -f1))"
+  else
+    fail "dist/ directory missing after build"
+  fi
 
-step "Verify SPA serves index.html"
-HTML=$(curl -sS "http://localhost:$FRONTEND_PORT/" | head -1 || true)
-if echo "$HTML" | grep -qi "<!DOCTYPE html\|<html"; then
-  ok "index.html served"
+  # Patch Caddyfile to serve static files from dist/ instead of proxying to Vite
+  step "Patch Caddyfile to serve static frontend"
+  CADDYFILE="/etc/caddy/Caddyfile"
+  STATIC_DIR="/var/www/colmena"
+  mkdir -p "$STATIC_DIR"
+  cp -r "$FRONTEND_DIR/dist/"* "$STATIC_DIR/"
+  if [[ -f "$CADDYFILE" ]]; then
+    # Replace the Vite reverse_proxy handle block with static file serving.
+    # Keep the /api/* handle block intact.
+    node -e "
+      const fs = require('fs');
+      let c = fs.readFileSync('$CADDYFILE', 'utf8');
+      // Replace the catch-all handle block (reverse_proxy to Vite) with static serving
+      c = c.replace(
+        /handle\\s*\\{[^}]*reverse_proxy\\s+localhost:\\$FRONTEND_PORT[^}]*\\}/,
+        'handle {\\n        root * $STATIC_DIR\\n        try_files {path} /index.html\\n        file_server\\n    }'
+      );
+      fs.writeFileSync('$CADDYFILE', c);
+      console.log('  patched Caddyfile');
+    " 2>>"$FRONTEND_LOG" || warn "could not patch Caddyfile"
+    systemctl reload caddy && ok "Caddy reloaded with static frontend" || warn "Caddy reload failed"
+  else
+    warn "Caddyfile not found at $CADDYFILE"
+  fi
 else
-  fail "did not get index.html; first line: $HTML"
+  # ── Local mode: Vite dev server ──
+  step "Start Vite dev :$FRONTEND_PORT"
+  if (echo > "/dev/tcp/127.0.0.1/$FRONTEND_PORT") 2>/dev/null; then
+    warn "port $FRONTEND_PORT busy; killing prior listener"
+    lsof -ti tcp:"$FRONTEND_PORT" 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+    sleep 1
+  fi
+  setsid nohup npm run dev -- --port "$FRONTEND_PORT" --host "::" >>"$FRONTEND_LOG" 2>&1 </dev/null & disown
+  sleep 3
+
+  if wait_for_url "http://localhost:$FRONTEND_PORT/" 20 200; then
+    ok "frontend up on :$FRONTEND_PORT (note: Vite binds IPv6 localhost)"
+  else
+    fail "frontend did not respond on :$FRONTEND_PORT; see $FRONTEND_LOG"
+    tail -30 "$FRONTEND_LOG"
+  fi
+
+  step "Verify SPA serves index.html"
+  HTML=$(curl -sS "http://localhost:$FRONTEND_PORT/" | head -1 || true)
+  if echo "$HTML" | grep -qi "<!DOCTYPE html\|<html"; then
+    ok "index.html served"
+  else
+    fail "did not get index.html; first line: $HTML"
+  fi
 fi
 
 finish_stage

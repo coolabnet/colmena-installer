@@ -13,44 +13,66 @@ async function setReactInputValue(page: Page, selector: string, value: string) {
 }
 
 // Wait for the SPA to fully mount (PatternFly + React + the route's content)
+// Uses 'commit' instead of 'domcontentloaded' because the Vite dev server
+// behind Caddy can have slow/stuck module transforms that block the
+// domcontentloaded event for 60+ seconds. 'commit' fires when the initial
+// HTML response is received, then we wait for React to hydrate via selectors.
 async function waitForSpaMount(page: Page) {
-  await page.waitForLoadState('domcontentloaded');
-  await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
-  // Give the SPA a moment to hydrate
-  await page.waitForTimeout(500);
+  await page.waitForLoadState('commit' as any);
+  // Give the SPA time to hydrate and render. On a remote droplet with a
+  // Vite dev server, module transforms are slow; wait for #root to populate.
+  // Use a longer timeout for remote droplets vs local.
+  await page.waitForFunction(() => {
+    const root = document.getElementById('root');
+    return root && root.children.length > 0;
+  }, { timeout: 30_000 }).catch(() => {});
+  // Extra wait for React hydration to complete — Vite module transforms on a
+  // remote droplet can be extremely slow (5-30s per module graph).
+  await page.waitForTimeout(5000);
 }
 
 // Full login flow: register server -> connect -> login -> reach /home
 async function loginAsTestUser(page: Page) {
-  await page.goto('/');
+  await page.goto('/', { waitUntil: 'commit' });
   await waitForSpaMount(page);
   await page.evaluate(() => localStorage.clear());
 
-  await page.goto('/auth/servers');
+  await page.goto('/auth/servers', { waitUntil: 'commit' });
   await waitForSpaMount(page);
-  await expect(page.locator('text=/^Servers$/').first()).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator('text=/^Servers$/').first()).toBeVisible({ timeout: 30_000 });
 
-  await page.getByRole('button', { name: /Add server/i }).click();
-  await expect(page.locator('#server_name_text_input')).toBeVisible({ timeout: 10_000 });
+  // Check if server already exists (from a previous test run)
+  const existingServer = page.locator(`text=/Local Backend/i`).first();
+  if (await existingServer.isVisible({ timeout: 5_000 }).catch(() => false)) {
+    // Server already registered — skip to connect
+    await page.locator('button[aria-label="Actions"]').first().click();
+    const connectItem = page.getByRole('menuitem', { name: /Connect to server/i });
+    await expect(connectItem).toBeEnabled({ timeout: 15_000 });
+    await connectItem.click();
+  } else {
+    // Register the server
+    await page.getByRole('button', { name: /Add server/i }).click();
+    await expect(page.locator('#server_name_text_input')).toBeVisible({ timeout: 10_000 });
 
-  await setReactInputValue(page, '#server_name_text_input', 'Local Backend');
-  await setReactInputValue(page, '#server_address_text_input', serverUrl);
+    await setReactInputValue(page, '#server_name_text_input', 'Local Backend');
+    await setReactInputValue(page, '#server_address_text_input', serverUrl);
 
-  await page.getByRole('button', { name: /^Confirm$/i }).click();
-  await expect(page.locator('text=/server is saved correctly/i')).toBeVisible({ timeout: 10_000 });
+    await page.getByRole('button', { name: /^Confirm$/i }).click();
+    await expect(page.locator('text=/server is saved correctly/i')).toBeVisible({ timeout: 10_000 });
 
-  await page.getByRole('button', { name: /Close Success alert/i }).click().catch(() => {});
+    await page.getByRole('button', { name: /Close Success alert/i }).click().catch(() => {});
 
-  await page.locator('button[aria-label="Actions"]').first().click();
-  const connectItem = page.getByRole('menuitem', { name: /Connect to server/i });
-  await expect(connectItem).toBeEnabled({ timeout: 15_000 });
-  await connectItem.click();
+    await page.locator('button[aria-label="Actions"]').first().click();
+    const connectItem = page.getByRole('menuitem', { name: /Connect to server/i });
+    await expect(connectItem).toBeEnabled({ timeout: 15_000 });
+    await connectItem.click();
+  }
   await expect(page).toHaveURL(/\/auth\/login/, { timeout: 10_000 });
 
   await setReactInputValue(page, '#username_text_input', 'testuser@domain.org');
   await setReactInputValue(page, '#password_text_input', 'testpassword123');
   await page.getByRole('button', { name: /Sign in/i }).click();
-  await expect(page).toHaveURL(/\/user\/welcome|\/home/, { timeout: 15_000 });
+  await expect(page).toHaveURL(/\/user\/welcome|\/home/, { timeout: 30_000 });
 
   // Skip onboarding if present
   const skipBtn = page.getByRole('button', { name: /^Skip$/i });
@@ -65,14 +87,14 @@ async function loginAsTestUser(page: Page) {
     await waitForSpaMount(page);
   }
   await expect(page).toHaveURL(/\/home/);
-  await expect(page.locator('#nav-toggle')).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator('#nav-toggle')).toBeVisible({ timeout: 45_000 });
 }
 
 // Navigate to the recorder page
 // Uses page.goto since ToolItem's forceReloadPage does a full page reload anyway.
 // The OpenAPI client re-initializes from localStorage on page load.
 async function goToRecorder(page: Page) {
-  await page.goto('/tools');
+  await page.goto('/tools', { waitUntil: 'commit' });
   await waitForSpaMount(page);
 
   // Wait for the AccessTools page to render (the tools title appears before tool items)
@@ -86,8 +108,7 @@ async function goToRecorder(page: Page) {
   await recorderButton.click();
 
   // Wait for the full page reload to complete
-  await page.waitForLoadState('domcontentloaded');
-  await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
+  await page.waitForLoadState('commit' as any);
   await page.waitForTimeout(3000);
 
   // Wait for the record button to be ready
@@ -164,20 +185,21 @@ async function openUploadModalAndFillFields(page: Page, recordingName: string) {
 test.describe('Colmena end-to-end', () => {
   test('redirects to /auth/servers when no server is saved', async ({ page }) => {
     await page.context().clearCookies();
-    await page.goto('/');
+    await page.goto('/', { waitUntil: 'commit' });
+    await page.evaluate(() => localStorage.clear());
     await waitForSpaMount(page);
-    await expect(page).toHaveURL(/\/auth\/servers/);
-    await expect(page.locator('text=/^Servers$/').first()).toBeVisible({ timeout: 10_000 });
+    await expect(page).toHaveURL(/\/auth\/servers/, { timeout: 30_000 });
+    await expect(page.locator('text=/^Servers$/').first()).toBeVisible({ timeout: 30_000 });
   });
 
   test('register a server, connect, log in, see home', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/', { waitUntil: 'commit' });
     await waitForSpaMount(page);
     await page.evaluate(() => localStorage.clear());
 
-    await page.goto('/auth/servers');
+    await page.goto('/auth/servers', { waitUntil: 'commit' });
     await waitForSpaMount(page);
-    await expect(page.locator('text=/^Servers$/').first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('text=/^Servers$/').first()).toBeVisible({ timeout: 30_000 });
 
     // Open the Add Server modal
     await page.getByRole('button', { name: /Add server/i }).click();
@@ -223,7 +245,7 @@ test.describe('Colmena end-to-end', () => {
     }
     await expect(page).toHaveURL(/\/home/);
     // Wait for the home page to mount (header + side nav render)
-    await expect(page.locator('#nav-toggle')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#nav-toggle')).toBeVisible({ timeout: 45_000 });
 
     // Sanity: JWT in localStorage
     const user = await page.evaluate(() => JSON.parse(localStorage.getItem('user') || '{}'));
@@ -233,47 +255,21 @@ test.describe('Colmena end-to-end', () => {
   });
 
   test('hamburger menu opens and expands', async ({ page }) => {
-    // Pre-seed localStorage to skip login
-    await page.goto('/');
-    await waitForSpaMount(page);
-    await page.evaluate(() => {
-      localStorage.clear();
-      localStorage.setItem(
-        'user',
-        JSON.stringify({
-          access: 'fake-jwt-for-hamburger-test',
-          refresh: 'fake-refresh',
-          user: {
-            pk: 2,
-            username: 'testuser',
-            full_name: 'Test User',
-            email: 'testuser@domain.org',
-            group: { id: 5, name: 'User' },
-            organization: null,
-            organizationId: null,
-            roles: ['User'],
-          },
-        }),
-      );
-      localStorage.setItem('serverId', '1');
-      localStorage.setItem('isWelcomeMessageVisible', 'false');
-    });
-    await page.goto('/home');
-    await waitForSpaMount(page);
-    // Skip the welcome modal if it appears
-    await page.getByRole('button', { name: /^Skip$/i }).click({ timeout: 3_000 }).catch(() => {});
+    test.setTimeout(120_000);
+    await loginAsTestUser(page);
+
     // Wait for the home page to be fully rendered
-    await page.locator('#nav-toggle').waitFor({ state: 'visible', timeout: 15_000 });
+    await page.locator('#nav-toggle').waitFor({ state: 'visible', timeout: 30_000 });
 
     await page.locator('#nav-toggle').click();
     await expect(page.getByText('My account').first()).toBeVisible();
 
     await page.getByText('My account').first().click();
-    await expect(page.getByText('User Profile')).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText('User Profile')).toBeVisible({ timeout: 15_000 });
   });
 
   test('API call from the browser returns backend status', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/', { waitUntil: 'commit' });
     const status = await page.evaluate(async (url) => {
       const r = await fetch(`${url}/api/status/`);
       return r.json();
@@ -287,9 +283,9 @@ test.describe('Colmena end-to-end', () => {
     // Navigate to Teams via SPA router (page.goto would reload and lose OpenAPI client context)
     // Use React Router's navigate by clicking the Teams link in the bottom nav
     const teamsLink = page.getByRole('link', { name: /teams/i }).first();
-    await expect(teamsLink).toBeVisible({ timeout: 10_000 });
+    await expect(teamsLink).toBeVisible({ timeout: 30_000 });
     await teamsLink.click();
-    await expect(page).toHaveURL(/\/teams/, { timeout: 10_000 });
+    await expect(page).toHaveURL(/\/teams/, { timeout: 15_000 });
     await waitForSpaMount(page);
 
     // Wait for team items to load (skeletons should be replaced by real data)
@@ -305,7 +301,7 @@ test.describe('Colmena end-to-end', () => {
     expect(nameText!.length).toBeGreaterThan(0);
 
     // Verify the specific seeded team appears somewhere on the page
-    await expect(page.getByText('Test Team').first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText('Test Team').first()).toBeVisible({ timeout: 15_000 });
 
     // Verify the error state is NOT showing
     const errorState = page.locator('text=/preview_error/i');
@@ -313,7 +309,7 @@ test.describe('Colmena end-to-end', () => {
   });
 
   test('My Space page loads with personal workspace after login', async ({ page }) => {
-    test.setTimeout(60_000);
+    test.setTimeout(180_000);
     await loginAsTestUser(page);
 
     // Get the personal workspace team ID from the API
@@ -336,9 +332,9 @@ test.describe('Colmena end-to-end', () => {
     await page.locator('#nav-toggle').click();
     // The My Space nav link is the second NavLink in the side nav
     const mySpaceLink = page.locator('a[href^="/my-space/"]').first();
-    await expect(mySpaceLink).toBeVisible({ timeout: 10_000 });
+    await expect(mySpaceLink).toBeVisible({ timeout: 30_000 });
     await mySpaceLink.click();
-    await expect(page).toHaveURL(new RegExp(`/my-space/`), { timeout: 10_000 });
+    await expect(page).toHaveURL(new RegExp(`/my-space/`), { timeout: 15_000 });
     await waitForSpaMount(page);
 
     // The My Space page renders TeamChat with a message text area

@@ -209,6 +209,19 @@ else
   ok "pip install (cached via venv/.installed.stamp)"
 fi
 
+step "Generate Nextcloud OpenAPI client (apps/nextcloud/openapi/client)"
+# The client/ package is generated from schema.json by openapi-python-generator
+# (a base.txt dependency) and is gitignored, so it's absent on a fresh clone.
+# Without it Django fails to import apps.nextcloud.* at startup with
+# "ModuleNotFoundError: No module named 'apps.nextcloud.openapi.client'",
+# which breaks tests, migrate, AND the runserver. Generate it before any
+# Django command runs. Idempotent (regenerates each run).
+if make setup.openapi >>"$BACKEND_LOG" 2>&1 && [[ -d apps/nextcloud/openapi/client ]]; then
+  ok "Nextcloud OpenAPI client generated"
+else
+  fail "make setup.openapi failed; Django imports will break (see $BACKEND_LOG)"
+fi
+
 step "Lint (black --check)"
 if black --check . >>"$BACKEND_LOG" 2>&1; then
   ok "black clean"
@@ -349,6 +362,30 @@ if curl -s --max-time 3 http://localhost:8003 >/dev/null 2>&1; then
   fi
 else
   skip "Nextcloud not reachable, skipping testuser Nextcloud setup"
+fi
+
+step "Patch ALLOWED_HOSTS for droplet mode (Caddy reverse proxy)"
+# In droplet mode the backend is fronted by Caddy, so the Host header is the
+# public domain (e.g. colmena.luandro.com). dev.py doesn't set ALLOWED_HOSTS,
+# so Django defaults to the empty list and rejects all non-localhost requests.
+# Patch dev.py to accept any host + set CSRF_TRUSTED_ORIGINS. Idempotent.
+DEV_PY="$BACKEND_DIR/colmena/settings/dev.py"
+if [[ "$STACK_MODE" == "droplet" ]] && [[ -f "$DEV_PY" ]]; then
+  if ! grep -q 'ALLOWED_HOSTS.*\*' "$DEV_PY"; then
+    PUBLIC_DOMAIN="${BACKEND_HOSTNAME%%:*}"
+    cat >>"$DEV_PY" <<PATCH
+# [installer] droplet ALLOWED_HOSTS: backend is fronted by Caddy with the public
+# Host header (e.g. $PUBLIC_DOMAIN). dev.py otherwise leaves ALLOWED_HOSTS
+# unset (Django defaults to []), which blocks all non-localhost requests.
+ALLOWED_HOSTS = ["*"]
+CSRF_TRUSTED_ORIGINS = ["https://$PUBLIC_DOMAIN"]
+PATCH
+    ok "patched dev.py with ALLOWED_HOSTS=['*'] + CSRF_TRUSTED_ORIGINS"
+  else
+    ok "dev.py already has ALLOWED_HOSTS"
+  fi
+else
+  ok "local mode or dev.py not found; skipping ALLOWED_HOSTS patch"
 fi
 
 step "Start backend runserver :$BACKEND_PORT"

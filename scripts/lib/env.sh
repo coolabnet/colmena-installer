@@ -25,6 +25,13 @@ MAIL_SMTP_PORT="${MAIL_SMTP_PORT:-1025}"
 MAIL_WEB_PORT="${MAIL_WEB_PORT:-1080}"
 NEXTCLOUD_PORT="${NEXTCLOUD_PORT:-8003}"
 
+# Hostnames for the backend/frontend (used by load_sites_with_hostname and
+# ALLOWED_HOSTS patching). In local mode these default to localhost; in droplet
+# mode (STACK_MODE=droplet) they should be set to the public domain.
+BACKEND_HOSTNAME="${BACKEND_HOSTNAME:-localhost:$BACKEND_PORT}"
+FRONTEND_HOSTNAME="${FRONTEND_HOSTNAME:-localhost:$FRONTEND_PORT}"
+STACK_MODE="${STACK_MODE:-local}"
+
 # Logs per service
 BACKEND_LOG="$LOG_DIR/backend.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"

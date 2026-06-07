@@ -2,8 +2,8 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e',
-  timeout: 30_000,
-  expect: { timeout: 5_000 },
+  timeout: 180_000,
+  expect: { timeout: 10_000 },
   fullyParallel: false,
   workers: 1,
   reporter: [['list'], ['html', { open: 'never' }]],
@@ -15,8 +15,8 @@ export default defineConfig({
     ignoreHTTPSErrors: true,
     headless: true,
     viewport: { width: 1280, height: 720 },
-    actionTimeout: 5_000,
-    navigationTimeout: 15_000,
+    actionTimeout: 10_000,
+    navigationTimeout: 45_000,
     screenshot: 'on',
     video: 'on',
     trace: 'on',
