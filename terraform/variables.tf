@@ -52,7 +52,7 @@ variable "droplet_image" {
 }
 
 variable "letsencrypt_staging" {
-  description = "If true, Caddy uses the Let's Encrypt staging CA (untrusted by browsers). Set to false for a real, browser-trusted cert."
+  description = "If true, Caddy uses the Let's Encrypt staging CA (untrusted by browsers). Set to false for a real, browser-trusted cert. NOTE: Let's Encrypt rate-limits to 5 certs per domain per 168h — if you hit this, use staging until the window resets."
   type        = bool
-  default     = false
+  default     = true
 }
