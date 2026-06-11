@@ -373,12 +373,16 @@ DEV_PY="$BACKEND_DIR/colmena/settings/dev.py"
 if [[ "$STACK_MODE" == "droplet" ]] && [[ -f "$DEV_PY" ]]; then
   if ! grep -q 'ALLOWED_HOSTS.*\*' "$DEV_PY"; then
     PUBLIC_DOMAIN="${BACKEND_HOSTNAME%%:*}"
+    FRONTEND_PUBLIC_DOMAIN="${FRONTEND_HOSTNAME%%:*}"
     cat >>"$DEV_PY" <<PATCH
 # [installer] droplet ALLOWED_HOSTS: backend is fronted by Caddy with the public
 # Host header (e.g. $PUBLIC_DOMAIN). dev.py otherwise leaves ALLOWED_HOSTS
 # unset (Django defaults to []), which blocks all non-localhost requests.
 ALLOWED_HOSTS = ["*"]
-CSRF_TRUSTED_ORIGINS = ["https://$PUBLIC_DOMAIN"]
+# Both the frontend subdomain (Origin header on browser requests) and the API
+# subdomain must be trusted so Django's CsrfViewMiddleware accepts cross-origin
+# POSTs from the frontend to the API.
+CSRF_TRUSTED_ORIGINS = ["https://$PUBLIC_DOMAIN", "https://$FRONTEND_PUBLIC_DOMAIN"]
 PATCH
     ok "patched dev.py with ALLOWED_HOSTS=['*'] + CSRF_TRUSTED_ORIGINS"
   else
