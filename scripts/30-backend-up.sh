@@ -371,9 +371,15 @@ step "Patch ALLOWED_HOSTS for droplet mode (Caddy reverse proxy)"
 # Patch dev.py to accept any host + set CSRF_TRUSTED_ORIGINS. Idempotent.
 DEV_PY="$BACKEND_DIR/colmena/settings/dev.py"
 if [[ "$STACK_MODE" == "droplet" ]] && [[ -f "$DEV_PY" ]]; then
-  if ! grep -q 'ALLOWED_HOSTS.*\*' "$DEV_PY"; then
-    PUBLIC_DOMAIN="${BACKEND_HOSTNAME%%:*}"
-    FRONTEND_PUBLIC_DOMAIN="${FRONTEND_HOSTNAME%%:*}"
+  PUBLIC_DOMAIN="${BACKEND_HOSTNAME%%:*}"
+  FRONTEND_PUBLIC_DOMAIN="${FRONTEND_HOSTNAME%%:*}"
+  if grep -q 'ALLOWED_HOSTS.*\*' "$DEV_PY" \
+    && grep -q "https://$PUBLIC_DOMAIN" "$DEV_PY" \
+    && grep -q "https://$FRONTEND_PUBLIC_DOMAIN" "$DEV_PY"; then
+    ok "dev.py already has ALLOWED_HOSTS + CSRF_TRUSTED_ORIGINS"
+  else
+    # Remove any previous installer patch block before re-applying
+    sed -i '/^# \[installer\] droplet ALLOWED_HOSTS:/,/^CSRF_TRUSTED_ORIGINS = /d' "$DEV_PY"
     cat >>"$DEV_PY" <<PATCH
 # [installer] droplet ALLOWED_HOSTS: backend is fronted by Caddy with the public
 # Host header (e.g. $PUBLIC_DOMAIN). dev.py otherwise leaves ALLOWED_HOSTS
@@ -385,8 +391,6 @@ ALLOWED_HOSTS = ["*"]
 CSRF_TRUSTED_ORIGINS = ["https://$PUBLIC_DOMAIN", "https://$FRONTEND_PUBLIC_DOMAIN"]
 PATCH
     ok "patched dev.py with ALLOWED_HOSTS=['*'] + CSRF_TRUSTED_ORIGINS"
-  else
-    ok "dev.py already has ALLOWED_HOSTS"
   fi
 else
   ok "local mode or dev.py not found; skipping ALLOWED_HOSTS patch"
