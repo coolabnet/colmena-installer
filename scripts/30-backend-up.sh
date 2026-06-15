@@ -292,6 +292,39 @@ else
   fail "migrate failed"
 fi
 
+# Single-domain installs (frontend + API on the same host) make two seeded Sites
+# -- "backend-domain" and "frontend-invitation-domain" -- resolve to the SAME bare
+# host. django.contrib.sites declares Site.domain UNIQUE, so loaddata would hit a
+# unique violation and roll back the ENTIRE Sites fixture, leaving invitation and
+# password-reset email links broken at runtime. The app only ever looks these rows
+# up by NAME (Site.objects.get(name=...)), never by domain, so relaxing that one
+# uniqueness is safe. Postgres (the droplet DB) only; idempotent; non-fatal.
+if [[ "${STACK_MODE:-local}" == "droplet" && "$BACKEND_HOSTNAME" == "$FRONTEND_HOSTNAME" ]]; then
+  step "Single-domain: relax django_site.domain uniqueness (Sites are keyed by name)"
+  if python manage.py shell --settings=colmena.settings.dev >>"$BACKEND_LOG" 2>&1 <<'PYEOF'
+from django.db import connection
+if connection.vendor == "postgresql":
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT conname FROM pg_constraint "
+            "WHERE conrelid = 'django_site'::regclass AND contype = 'u'"
+        )
+        for (name,) in cur.fetchall():
+            cur.execute(f'ALTER TABLE django_site DROP CONSTRAINT IF EXISTS "{name}"')
+        cur.execute(
+            "SELECT indexname FROM pg_indexes WHERE tablename = 'django_site' "
+            "AND indexdef ILIKE '%unique%' AND indexdef ILIKE '%domain%'"
+        )
+        for (name,) in cur.fetchall():
+            cur.execute(f'DROP INDEX IF EXISTS "{name}"')
+PYEOF
+  then
+    ok "django_site.domain uniqueness relaxed for single-domain"
+  else
+    warn "could not relax django_site uniqueness (non-fatal; invitation/reset email links may break under single-domain)"
+  fi
+fi
+
 step "Load sites (load_sites_with_hostname)"
 if python manage.py load_sites_with_hostname "$BACKEND_HOSTNAME" "$FRONTEND_HOSTNAME" --settings=colmena.settings.dev >>"$BACKEND_LOG" 2>&1; then
   ok "sites loaded"
@@ -373,9 +406,27 @@ DEV_PY="$BACKEND_DIR/colmena/settings/dev.py"
 if [[ "$STACK_MODE" == "droplet" ]] && [[ -f "$DEV_PY" ]]; then
   PUBLIC_DOMAIN="${BACKEND_HOSTNAME%%:*}"
   FRONTEND_PUBLIC_DOMAIN="${FRONTEND_HOSTNAME%%:*}"
+  # Build a CSRF origin from a HOST[:PORT] value, preserving any non-standard port.
+  # Browsers omit :443 from the Origin header, so strip that one; keep other ports
+  # (e.g. a bring-your-own-server install serving on https://1.2.3.4:8443).
+  _csrf_origin() {
+    local h="$1"
+    h="${h#https://}"; h="${h#http://}"   # tolerate a scheme if one slipped in
+    case "$h" in *:443) h="${h%:443}" ;; esac
+    printf 'https://%s' "$h"
+  }
+  BACKEND_ORIGIN="$(_csrf_origin "$BACKEND_HOSTNAME")"
+  FRONTEND_ORIGIN="$(_csrf_origin "$FRONTEND_HOSTNAME")"
+  # Single-domain installs pass the same host for both; dedupe so we don't list it twice.
+  if [[ "$BACKEND_ORIGIN" == "$FRONTEND_ORIGIN" ]]; then
+    CSRF_LIST="\"$BACKEND_ORIGIN\""
+  else
+    CSRF_LIST="\"$BACKEND_ORIGIN\", \"$FRONTEND_ORIGIN\""
+  fi
+  # -F: origins contain :/. so match them as fixed strings, not regexes.
   if grep -q 'ALLOWED_HOSTS.*\*' "$DEV_PY" \
-    && grep -q "https://$PUBLIC_DOMAIN" "$DEV_PY" \
-    && grep -q "https://$FRONTEND_PUBLIC_DOMAIN" "$DEV_PY"; then
+    && grep -qF "$BACKEND_ORIGIN" "$DEV_PY" \
+    && grep -qF "$FRONTEND_ORIGIN" "$DEV_PY"; then
     ok "dev.py already has ALLOWED_HOSTS + CSRF_TRUSTED_ORIGINS"
   else
     # Remove any previous installer patch block before re-applying
@@ -385,10 +436,9 @@ if [[ "$STACK_MODE" == "droplet" ]] && [[ -f "$DEV_PY" ]]; then
 # Host header (e.g. $PUBLIC_DOMAIN). dev.py otherwise leaves ALLOWED_HOSTS
 # unset (Django defaults to []), which blocks all non-localhost requests.
 ALLOWED_HOSTS = ["*"]
-# Both the frontend subdomain (Origin header on browser requests) and the API
-# subdomain must be trusted so Django's CsrfViewMiddleware accepts cross-origin
-# POSTs from the frontend to the API.
-CSRF_TRUSTED_ORIGINS = ["https://$PUBLIC_DOMAIN", "https://$FRONTEND_PUBLIC_DOMAIN"]
+# Trust the public origin(s) so Django's CsrfViewMiddleware accepts browser POSTs.
+# Single-domain installs have one origin; the two-subdomain (Terraform) path has two.
+CSRF_TRUSTED_ORIGINS = [$CSRF_LIST]
 PATCH
     ok "patched dev.py with ALLOWED_HOSTS=['*'] + CSRF_TRUSTED_ORIGINS"
   fi
