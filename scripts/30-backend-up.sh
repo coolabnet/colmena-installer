@@ -243,13 +243,20 @@ else
   warn "OpenAPI generation had warnings (non-fatal)"
 fi
 
-step "Run backend tests (via Makefile, so we use the same flags as dev)"
-make test >>"$BACKEND_LOG" 2>&1
-TC=$?
-if [[ $TC -eq 0 ]]; then
-  ok "all backend tests pass"
+if [[ "${STACK_MODE:-local}" == "droplet" ]]; then
+  # In droplet/installer mode we are deploying, not developing -- running the dev
+  # test suite here is out of scope and its failures must not fail the install.
+  step "Run backend tests"
+  skip "skipped in droplet mode (deploy, not CI; run tests with STACK_MODE=local)"
 else
-  fail "backend tests failed (exit=$TC); see $BACKEND_LOG"
+  step "Run backend tests (via Makefile, so we use the same flags as dev)"
+  make test >>"$BACKEND_LOG" 2>&1
+  TC=$?
+  if [[ $TC -eq 0 ]]; then
+    ok "all backend tests pass"
+  else
+    fail "backend tests failed (exit=$TC); see $BACKEND_LOG"
+  fi
 fi
 
 step "Load backend .env for shell commands"
@@ -466,7 +473,17 @@ fi
 step "Sanity check API"
 STATUS=$(curl -sS "http://localhost:$BACKEND_PORT/api/status/")
 info "$STATUS"
-if echo "$STATUS" | jq -e '.backend.status == "ok"' >/dev/null; then
+# Parse without hard-depending on jq (a bare bring-your-own server has no jq).
+# Prefer jq, fall back to python (always present in the backend venv here), then
+# a tolerant grep, so a healthy backend is never reported as failed.
+if command -v jq >/dev/null 2>&1; then
+  echo "$STATUS" | jq -e '.backend.status == "ok"' >/dev/null 2>&1 && _api_ok=1 || _api_ok=0
+elif command -v python >/dev/null 2>&1; then
+  _api_ok=$(echo "$STATUS" | python -c 'import sys,json; d=json.load(sys.stdin); print(1 if d.get("backend",{}).get("status")=="ok" else 0)' 2>/dev/null || echo 0)
+else
+  echo "$STATUS" | grep -q '"backend"[[:space:]]*:[[:space:]]*{[^}]*"status"[[:space:]]*:[[:space:]]*"ok"' && _api_ok=1 || _api_ok=0
+fi
+if [[ "$_api_ok" == "1" ]]; then
   ok "backend reports ok"
 else
   fail "backend reports NOT ok: $STATUS"

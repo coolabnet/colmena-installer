@@ -24,8 +24,12 @@ stage 25 "Sync Postgres credentials: devops .env -> backend .env"
 
 [[ -f "$DEVOPS_DIR/.env" ]] || { fail "missing $DEVOPS_DIR/.env (run stage 20 first)"; exit 1; }
 [[ -f "$BACKEND_DIR/.env" ]] || {
-  fail "missing $BACKEND_DIR/.env (run stage 30 once to bootstrap it)"
-  exit 1
+  # On a fresh install (droplet/BYO one-liner) the stage order is 25 -> 30, so
+  # backend/.env does not exist yet; stage 30 creates it from the example and
+  # seeds the right Postgres creds. Nothing to sync into yet -> skip cleanly
+  # instead of failing the whole install. A re-run (with .env present) will sync.
+  skip "backend/.env not present yet (stage 30 bootstraps it); nothing to sync"
+  exit 0
 }
 
 # shellcheck disable=SC1091
