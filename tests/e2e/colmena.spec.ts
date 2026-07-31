@@ -109,9 +109,38 @@ async function goToRecorder(page: Page) {
   // ToolItem uses forceReloadPage which does location.href = url (full page reload)
   await recorderButton.click();
 
-  // Wait for the full page reload to complete
+  // After the Recorder trigger, ToolItem does a full location.href reload.
+  // App.tsx then (re)creates the OpenAPI client from localStorage async, so the
+  // upload modal can open before teams have loaded and the "Save .wav" / "Save
+  // project" buttons stay disabled. A blind sleep is a fragile proxy for
+  // readiness; instead wait on a real signal — the teams endpoint returning 200
+  // for the saved JWT proves the backend is up and the token is valid. The
+  // frontend-side readiness (record button enabled, team selector populated,
+  // "Test Team" visible) is gated by the downstream expects in
+  // openUploadModalAndFillFields and the test body. (Handoff § Option 1.)
+  // Works locally (http://localhost:8000) and against a remote droplet (serverUrl).
   await page.waitForLoadState('commit' as any);
-  await page.waitForTimeout(3000);
+  const token = await page.evaluate(() => {
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    return user?.access || '';
+  });
+  await page.waitForFunction(
+    async ({ serverUrl, token }: { serverUrl: string; token: string }) => {
+      if (!token) return false;
+      try {
+        const res = await fetch(`${serverUrl}/api/teams/?skip_personal_workspace=true`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return false;
+        const data: unknown = await res.json();
+        return Array.isArray(data);
+      } catch {
+        return false;
+      }
+    },
+    { serverUrl, token },
+    { timeout: 30_000 },
+  );
 
   // Wait for the record button to be ready
   const recordButton = page.locator('#initial-record-button');
