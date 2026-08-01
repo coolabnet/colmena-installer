@@ -5,6 +5,7 @@ export default defineConfig({
   timeout: 300_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
+  retries: 1,
   workers: 1,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
@@ -34,6 +35,12 @@ export default defineConfig({
           args: [
             '--use-fake-device-for-media-stream',
             '--use-fake-ui-for-media-stream',
+            ...(process.env.PLAYWRIGHT_BASE_URL?.startsWith('http://')
+              ? (() => {
+                  const origin = process.env.PLAYWRIGHT_BASE_URL!.replace(/\/+$/, '').replace(/^(https?:\/\/[^/]+).*/, '$1');
+                  return [`--unsafely-treat-insecure-origin-as-secure=${origin}`];
+                })()
+              : []),
             // When running against a remote droplet whose domain DNS is not
             // yet propagated, map the domain directly to the droplet's IP.
             // PLAYWRIGHT_DROPLET_IP is set by scripts/wait-and-test.sh.

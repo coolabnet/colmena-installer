@@ -414,13 +414,19 @@ if [[ "$STACK_MODE" == "droplet" ]] && [[ -f "$DEV_PY" ]]; then
   PUBLIC_DOMAIN="${BACKEND_HOSTNAME%%:*}"
   FRONTEND_PUBLIC_DOMAIN="${FRONTEND_HOSTNAME%%:*}"
   # Build a CSRF origin from a HOST[:PORT] value, preserving any non-standard port.
-  # Browsers omit :443 from the Origin header, so strip that one; keep other ports
-  # (e.g. a bring-your-own-server install serving on https://1.2.3.4:8443).
+  # Browsers omit the default port from the Origin header: :443 for https, :80 for
+  # http. Keep other ports (e.g. https://1.2.3.4:8443 or http://1.2.3.4:8080).
   _csrf_origin() {
     local h="$1"
+    local scheme=https
+    [[ "${COLMENA_TLS:-internal}" == "none" ]] && scheme=http
     h="${h#https://}"; h="${h#http://}"   # tolerate a scheme if one slipped in
-    case "$h" in *:443) h="${h%:443}" ;; esac
-    printf 'https://%s' "$h"
+    if [[ "$scheme" == "https" ]]; then
+      case "$h" in *:443) h="${h%:443}" ;; esac
+    else
+      case "$h" in *:80) h="${h%:80}" ;; esac
+    fi
+    printf '%s://%s' "$scheme" "$h"
   }
   BACKEND_ORIGIN="$(_csrf_origin "$BACKEND_HOSTNAME")"
   FRONTEND_ORIGIN="$(_csrf_origin "$FRONTEND_HOSTNAME")"

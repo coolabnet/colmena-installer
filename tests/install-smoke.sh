@@ -9,8 +9,10 @@
 # What it checks:
 #   * Host static: `bash -n install.sh`, `shellcheck -S error install.sh`.
 #   * Docker gate: `docker run --rm hello-world`; SKIP (exit 0) if unavailable.
-#   * Functional matrix x {ubuntu:22.04, debian:12}: 6 cases (production domain,
-#     staging domain, IP, IP:port, bogus-TLS rejected, prod-without-email rejected).
+#   * Functional matrix x {ubuntu:22.04, debian:12}: 10 cases (production domain,
+#     staging domain, IP, IP:port, bogus-TLS rejected, prod-without-email rejected,
+#     IP + plain HTTP, loopback default, IP + Let's Encrypt rejected, and loopback +
+#     Let's Encrypt rejected).
 #   * Stage-40 coupling: the catch-all handle block install.sh emits MUST match
 #     scripts/40-frontend-up.sh's regex, or the prod frontend is never served.
 #
@@ -22,7 +24,7 @@
 # the prod-without-email prompt. Per-case stdin:
 #   case 1 (prod+email):    "y\n"        -> DNS "Continue anyway?" only
 #   case 2 (staging):       "\ny\n"      -> blank email, then DNS "y"
-#   case 3..6:              empty/EOF    -> IP has no reads; 5/6 die early
+#   case 3..10:             empty/EOF    -> IP TLS prompt defaults to internal; env-driven cases stay prompt-free
 
 set -uo pipefail
 
@@ -111,7 +113,7 @@ cat > "$WORK/run-stack.sh" <<'STUB'
 echo "RUNSTACK_STUB_INVOKED arg=$1"
 echo "ENV BACKEND_HOSTNAME=$BACKEND_HOSTNAME"
 echo "ENV FRONTEND_HOSTNAME=$FRONTEND_HOSTNAME"
-echo "ENV STACK_MODE=$STACK_MODE INSTALL_MISSING=$INSTALL_MISSING SKIP_DEV_TOOLS=$SKIP_DEV_TOOLS COLMENA_CLONE_PROTO=$COLMENA_CLONE_PROTO"
+echo "ENV STACK_MODE=$STACK_MODE INSTALL_MISSING=$INSTALL_MISSING SKIP_DEV_TOOLS=$SKIP_DEV_TOOLS COLMENA_CLONE_PROTO=$COLMENA_CLONE_PROTO COLMENA_TLS=$COLMENA_TLS"
 exit 0
 STUB
 chmod +x "$WORK/run-stack.sh"
@@ -243,6 +245,36 @@ run_install /tmp/in_empty COLMENA_HOST=colmena.example.com COLMENA_TLS=productio
 { [ "$RC" -ne 0 ] || fail "exit=0 want-nonzero"; }
 emit "CASE 6"
 
+# ---- CASE 7: IP + plain HTTP ----
+reset
+run_install /tmp/in_empty COLMENA_HOST=203.0.113.7 COLMENA_TLS=none
+cp "$CAD" /tmp/cad7 2>/dev/null || cp /dev/null /tmp/cad7
+{ [ "$RC" -eq 0 ] || fail "exit=$RC want0"; }
+{ grep -Eq '^http://203\.0\.113\.7 \{' "$CAD" || fail "no-http-ip-site-line"; }
+{ has "$CAD" "tls internal" && fail "unexpected-tls-internal"; }
+{ has "$OUT" "COLMENA_TLS=none" || fail "no-COLMENA_TLS"; }
+emit "CASE 7"
+
+# ---- CASE 8: loopback defaults to plain HTTP ----
+reset
+run_install /tmp/in_empty COLMENA_HOST=127.0.0.1
+{ [ "$RC" -eq 0 ] || fail "exit=$RC want0"; }
+{ grep -Eq '^http://127\.0\.0\.1 \{' "$CAD" || fail "no-http-loopback-site-line"; }
+{ has "$OUT" "COLMENA_TLS=none" || fail "no-COLMENA_TLS"; }
+emit "CASE 8"
+
+# ---- CASE 9: Let's Encrypt for an IP is rejected ----
+reset
+run_install /tmp/in_empty COLMENA_HOST=203.0.113.7 COLMENA_TLS=production
+{ [ "$RC" -ne 0 ] || fail "exit=0 want-nonzero"; }
+emit "CASE 9"
+
+# ---- CASE 10: Let's Encrypt for a loopback host is rejected ----
+reset
+run_install /tmp/in_empty COLMENA_HOST=localhost COLMENA_TLS=production
+{ [ "$RC" -ne 0 ] || fail "exit=0 want-nonzero"; }
+emit "CASE 10"
+
 # ---- STAGE-40 regex coupling (scripts/40-frontend-up.sh rewrites the catch-all) ----
 reset
 { grep -Pzq 'handle\s*\{[\s\S]*?reverse_proxy\s+localhost:5173[\s\S]*?\}' /tmp/cad1 || fail "regex-no-match-case1"; }
@@ -250,6 +282,9 @@ emit "STAGE40 case1"
 reset
 { grep -Pzq 'handle\s*\{[\s\S]*?reverse_proxy\s+localhost:5173[\s\S]*?\}' /tmp/cad3 || fail "regex-no-match-case3"; }
 emit "STAGE40 case3"
+reset
+{ grep -Pzq 'handle\s*\{[\s\S]*?reverse_proxy\s+localhost:5173[\s\S]*?\}' /tmp/cad7 || fail "regex-no-match-case7"; }
+emit "STAGE40 case7"
 
 echo "===== end $IMG ====="
 CONTAINER

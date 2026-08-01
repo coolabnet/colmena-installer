@@ -4,9 +4,10 @@
 # Installs the full Colmena stack on a fresh Ubuntu/Debian server with one command:
 #   bash <(curl -fsSL https://raw.githubusercontent.com/coolabnet/colmena-installer/main/install.sh)
 #
-# The stack is served from a SINGLE host: the frontend at https://<host>/ and the
-# API at https://<host>/api/* (Caddy proxies /api/* to Django on :8000, everything
+# The stack is served from a SINGLE host: the frontend at <scheme>://<host>/ and the
+# API at <scheme>://<host>/api/* (Caddy proxies /api/* to Django on :8000, everything
 # else to the frontend on :5173, which stage 40 later swaps to static files).
+# Use COLMENA_TLS=none for plain HTTP when no SSL certificate or domain is available.
 # There is NO second "api" subdomain here -- that is the Terraform path only.
 #
 # What this script does:
@@ -21,7 +22,7 @@
 # Env-var overrides (skip the matching interactive prompt):
 #   COLMENA_HOST   -- domain or IP[:port] to serve on
 #   COLMENA_EMAIL  -- email for Let's Encrypt / TLS notices
-#   COLMENA_TLS    -- one of: production | staging | internal
+#   COLMENA_TLS    -- one of: production | staging | internal | none
 set -euo pipefail
 
 RED='\033[0;31m'
@@ -79,16 +80,45 @@ if [[ "$HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(:[0-9]+)?$ ]]; then
   HOST_IS_IP=1
 fi
 
+# Loopback hosts (localhost / 127.x / ::1) are for local deployments: plain HTTP.
+HOST_BARE="${HOST%%:*}"
+HOST_IS_LOOPBACK=0
+case "$HOST_BARE" in
+  localhost|127.*) HOST_IS_LOOPBACK=1 ;;
+esac
+[[ "$HOST" == "::1" ]] && HOST_IS_LOOPBACK=1
+
+# Caddy site-address / URL form of the host. A bare IPv6 literal (e.g. ::1) must
+# be wrapped in [] or Caddy's address parser and the printed URL are both invalid.
+# IPv4, hostnames, and already-bracketed IPv6 ([::1], [::1]:port) pass through.
+CADDY_ADDR="$HOST"
+if [[ "$HOST" == *:* && "$HOST" != *.* && "$HOST" != "["* ]]; then
+  CADDY_ADDR="[$HOST]"
+fi
+
 # --- TLS mode ---
-if [[ "$HOST_IS_IP" -eq 1 ]]; then
-  # Let's Encrypt cannot issue certificates for bare IP addresses.
-  TLS="internal"
-  info "IP address detected -- using Caddy internal (self-signed) TLS. Browsers will show a certificate warning."
-elif [[ -v COLMENA_TLS ]]; then
+if [[ -v COLMENA_TLS ]]; then
   case "$COLMENA_TLS" in
-    production|staging|internal) TLS="$COLMENA_TLS" ;;
-    *) die "COLMENA_TLS must be one of: production, staging, internal (got: $COLMENA_TLS)" ;;
+    production|staging|internal|none) TLS="$COLMENA_TLS" ;;
+    http) TLS="none" ;;   # friendly alias
+    *) die "COLMENA_TLS must be one of: production, staging, internal, none (got: $COLMENA_TLS)" ;;
   esac
+  if [[ ( "$HOST_IS_IP" -eq 1 || "$HOST_IS_LOOPBACK" -eq 1 ) && ( "$TLS" == "production" || "$TLS" == "staging" ) ]]; then
+    die "Let's Encrypt cannot issue certificates for a bare IP or loopback host. Use COLMENA_TLS=internal or COLMENA_TLS=none."
+  fi
+elif [[ "$HOST_IS_LOOPBACK" -eq 1 ]]; then
+  TLS="none"
+  info "Loopback host detected -- serving plain HTTP (no TLS)."
+elif [[ "$HOST_IS_IP" -eq 1 ]]; then
+  # Let's Encrypt cannot issue certificates for bare IP addresses.
+  read -rp "Serve over plain HTTP (no TLS, no certificate warning)? [y/N]: " http_ans || http_ans=""
+  if [[ "${http_ans:0:1}" =~ [yY] ]]; then
+    TLS="none"
+    info "Serving plain HTTP. Browsers will NOT show a certificate warning."
+  else
+    TLS="internal"
+    info "IP address detected -- using Caddy internal (self-signed) TLS. Browsers will show a certificate warning."
+  fi
 else
   read -rp "Use Let's Encrypt STAGING certs (untrusted, for testing only)? [y/N]: " le_ans
   if [[ "${le_ans:0:1}" =~ [yY] ]]; then
@@ -120,33 +150,33 @@ if [[ "$TLS" == "production" || "$TLS" == "staging" ]]; then
 fi
 
 info "Host: $HOST   TLS: $TLS${EMAIL:+   Email: $EMAIL}"
+SCHEME=https
+[[ "$TLS" == "none" ]] && SCHEME=http
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 3. Verification (warn + confirm; never hard-fail)
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Strip any :port for DNS resolution.
-HOST_NAME="${HOST%%:*}"
-
 # Confirm the chosen host actually reaches this server.
-if [[ "$HOST_IS_IP" -eq 0 ]]; then
-  RESOLVED="$(getent hosts "$HOST_NAME" 2>/dev/null | awk '{print $1}' | head -1 || true)"
+# Plain HTTP does not need DNS or Let's Encrypt reachability checks.
+if [[ "$HOST_IS_IP" -eq 0 && "$TLS" != "none" ]]; then
+  RESOLVED="$(getent hosts "$HOST_BARE" 2>/dev/null | awk '{print $1}' | head -1 || true)"
   if [[ -z "$RESOLVED" ]] && command -v dig >/dev/null 2>&1; then
-    RESOLVED="$(dig +short "$HOST_NAME" A 2>/dev/null | tail -1 || true)"
+    RESOLVED="$(dig +short "$HOST_BARE" A 2>/dev/null | tail -1 || true)"
   fi
   if [[ -n "$RESOLVED" && "$RESOLVED" != "$SERVER_IP" ]]; then
-    warn "DNS for '$HOST_NAME' resolves to $RESOLVED, not this server ($SERVER_IP)."
+    warn "DNS for '$HOST_BARE' resolves to $RESOLVED, not this server ($SERVER_IP)."
     warn "Let's Encrypt validation will fail until DNS points here."
     read -rp "Continue anyway? [y/N]: " ans
-    [[ "${ans:0:1}" =~ [yY] ]] || die "Aborted. Point DNS for $HOST_NAME to $SERVER_IP and re-run."
+    [[ "${ans:0:1}" =~ [yY] ]] || die "Aborted. Point DNS for $HOST_BARE to $SERVER_IP and re-run."
   elif [[ -z "$RESOLVED" ]]; then
-    warn "Could not resolve '$HOST_NAME'. Let's Encrypt validation will likely fail."
+    warn "Could not resolve '$HOST_BARE'. Let's Encrypt validation will likely fail."
     read -rp "Continue anyway? [y/N]: " ans
     [[ "${ans:0:1}" =~ [yY] ]] || die "Aborted."
   fi
 else
-  if [[ "$HOST_NAME" != "$SERVER_IP" ]]; then
-    warn "The IP you entered ($HOST_NAME) differs from this server's detected public IP ($SERVER_IP)."
+  if [[ "$TLS" != "none" && "$HOST_BARE" != "$SERVER_IP" ]]; then
+    warn "The IP you entered ($HOST_BARE) differs from this server's detected public IP ($SERVER_IP)."
     read -rp "Continue anyway? [y/N]: " ans
     [[ "${ans:0:1}" =~ [yY] ]] || die "Aborted."
   fi
@@ -231,7 +261,10 @@ CADDY_TMP="$(mktemp)"
   fi
 
   # Site address line.
-  if [[ "$TLS" == "internal" ]]; then
+  if [[ "$TLS" == "none" ]]; then
+    # Explicit http:// scheme disables Caddy's automatic HTTPS entirely.
+    printf 'http://%s {\n' "$CADDY_ADDR"
+  elif [[ "$TLS" == "internal" ]]; then
     printf 'https://%s {\n' "$HOST"
     printf '    tls internal\n'
   else
@@ -282,6 +315,7 @@ export COLMENA_CLONE_PROTO=https
 export INSTALL_MISSING=1
 export SKIP_DEV_TOOLS=1
 export STACK_MODE=droplet
+export COLMENA_TLS="$TLS"
 export BACKEND_HOSTNAME="$HOST"
 export FRONTEND_HOSTNAME="$HOST"
 
@@ -289,8 +323,8 @@ info "Running the Colmena stack (this builds the backend + frontend, ~10 min)...
 if bash run-stack.sh droplet; then
   echo
   info "Colmena is up."
-  info "Open: https://$HOST"
-  info "Then, in the Colmena login screen, add your server with URL: https://$HOST"
+  info "Open: $SCHEME://$CADDY_ADDR"
+  info "Then, in the Colmena login screen, add your server with URL: $SCHEME://$CADDY_ADDR"
 else
   die "run-stack.sh failed. Review the output above, fix the issue, and re-run this installer (it is safe to re-run)."
 fi

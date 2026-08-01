@@ -6,16 +6,24 @@
 # cloud-init timeout that DO enforces.
 
 write_files:
+%{ if domain != "" ~}
   - path: /etc/caddy/Caddyfile
     permissions: "0644"
     owner: root:root
     content: |
+%{ if tls_mode == "none" ~}
+      http://${frontend_subdomain}.${domain} {
+%{ else ~}
       ${frontend_subdomain}.${domain} {
-      %{ if letsencrypt_staging ~}
+%{ endif ~}
+%{ if tls_mode == "internal" ~}
+          tls internal
+%{ endif ~}
+%{ if tls_mode == "staging" ~}
           tls {
               ca https://acme-staging-v02.api.letsencrypt.org/directory
           }
-      %{ endif ~}
+%{ endif ~}
           # /api/* goes to Django (same-origin avoids CORS issues)
           handle /api/* {
               reverse_proxy localhost:8000
@@ -25,15 +33,23 @@ write_files:
               reverse_proxy localhost:5173
           }
       }
+%{ if tls_mode == "none" ~}
+      http://${api_subdomain}.${domain} {
+%{ else ~}
       ${api_subdomain}.${domain} {
-      %{ if letsencrypt_staging ~}
+%{ endif ~}
+%{ if tls_mode == "internal" ~}
+          tls internal
+%{ endif ~}
+%{ if tls_mode == "staging" ~}
           tls {
               ca https://acme-staging-v02.api.letsencrypt.org/directory
           }
-      %{ endif ~}
+%{ endif ~}
           # API: proxy all requests to Django on :8000
           reverse_proxy localhost:8000
       }
+%{ endif ~}
   - path: /opt/colmena/start-stack.sh
     permissions: "0755"
     owner: root:root
@@ -44,8 +60,17 @@ write_files:
       export INSTALL_MISSING=1
       export SKIP_DEV_TOOLS=1
       export STACK_MODE=droplet
+      export COLMENA_TLS=${tls_mode}
+%{ if domain != "" ~}
       export BACKEND_HOSTNAME=${api_subdomain}.${domain}
       export FRONTEND_HOSTNAME=${frontend_subdomain}.${domain}
+%{ else ~}
+      SERVER_IP="$(curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsSL --max-time 5 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')"
+      # Bracket a bare IPv6 literal so Django's Host header matches ALLOWED_HOSTS.
+      case "$SERVER_IP" in *:*) case "$SERVER_IP" in *.*|'['*) ;; *) SERVER_IP="[$SERVER_IP]" ;; esac ;; esac
+      export BACKEND_HOSTNAME="$SERVER_IP"
+      export FRONTEND_HOSTNAME="$SERVER_IP"
+%{ endif ~}
       cd /root/colmena-installer
       exec bash run-stack.sh droplet
 
@@ -96,6 +121,21 @@ runcmd:
   # by write_files) when the caddy package's default Caddyfile would otherwise prompt.
   - DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" caddy
 
+%{ if domain == "" ~}
+  # IP-only deployment: detect the public IP at boot and write a single-site
+  # Caddyfile. The handle blocks MUST match scripts/40-frontend-up.sh's regex
+  # (reverse_proxy localhost:5173 catch-all) or the prod frontend never serves.
+  - |
+    SERVER_IP="$(curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsSL --max-time 5 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')"
+    [ -n "$SERVER_IP" ] || { echo "could not detect public IP" >&2; exit 1; }
+    # Bracket a bare IPv6 literal so the Caddy site address is valid.
+    case "$SERVER_IP" in *:*) case "$SERVER_IP" in *.*|'['*) ;; *) SERVER_IP="[$SERVER_IP]" ;; esac ;; esac
+%{ if tls_mode == "none" ~}
+    printf 'http://%s {\n    handle /api/* {\n        reverse_proxy localhost:8000\n    }\n    handle {\n        reverse_proxy localhost:5173\n    }\n}\n' "$SERVER_IP" > /etc/caddy/Caddyfile
+%{ else ~}
+    printf 'https://%s {\n    tls internal\n    handle /api/* {\n        reverse_proxy localhost:8000\n    }\n    handle {\n        reverse_proxy localhost:5173\n    }\n}\n' "$SERVER_IP" > /etc/caddy/Caddyfile
+%{ endif ~}
+%{ endif ~}
   - systemctl enable --now caddy
   - systemctl restart caddy
 

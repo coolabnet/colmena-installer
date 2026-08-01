@@ -4,13 +4,13 @@ output "droplet_ip" {
 }
 
 output "url" {
-  description = "HTTPS URL of the frontend."
-  value       = "https://${var.frontend_subdomain}.${var.domain_name}"
+  description = "URL of the frontend."
+  value       = "${local.scheme}://${local.frontend_host}"
 }
 
 output "api_url" {
-  description = "HTTPS URL of the API server."
-  value       = "https://${var.api_subdomain}.${var.domain_name}"
+  description = "URL of the API server."
+  value       = "${local.scheme}://${local.api_host}"
 }
 
 output "ssh_command" {
@@ -25,5 +25,5 @@ output "destroy_reminder" {
 
 output "e2e_command" {
   description = "One-shot command to wait for the stack to be ready and run the Playwright e2e suite from the local machine."
-  value       = "COLMENA_DOMAIN=${var.frontend_subdomain}.${var.domain_name} bash scripts/wait-and-test.sh"
+  value       = "COLMENA_SCHEME=${local.scheme} COLMENA_DOMAIN=${local.frontend_host} bash scripts/wait-and-test.sh"
 }

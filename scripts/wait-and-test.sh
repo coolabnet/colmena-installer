@@ -18,6 +18,14 @@ if [[ -z "$DOMAIN" ]]; then
   echo "usage: $0 <domain>  OR  COLMENA_DOMAIN=<domain> $0" >&2
   exit 1
 fi
+COLMENA_SCHEME="${COLMENA_SCHEME:-https}"
+HOST_IS_IP=0
+[[ "$DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && HOST_IS_IP=1
+if [[ "$COLMENA_SCHEME" == "https" ]]; then
+  RESOLVE_PORT=443
+else
+  RESOLVE_PORT=80
+fi
 
 STACK_TIMEOUT="${STACK_TIMEOUT:-900}"   # Phase 1: front door returns 2xx/3xx/404 (15 min; covers pyenv compile + Docker pulls)
 API_TIMEOUT="${API_TIMEOUT:-600}"        # Phase 2: API reports ok (10 min)
@@ -59,6 +67,11 @@ if [[ -z "$DROPLET_IP" || "$DROPLET_IP" == "null" ]]; then
 fi
 ok "droplet_ip=$DROPLET_IP"
 
+CURL_RESOLVE_ARGS=()
+if [[ "$HOST_IS_IP" -eq 0 ]]; then
+  CURL_RESOLVE_ARGS=(--resolve "$DOMAIN:$RESOLVE_PORT:$DROPLET_IP")
+fi
+
 # ---- 2. Phase 0: wait for SSH + Caddy service on the droplet ----------------------------------
 # This is a fast-fail signal. If the droplet's SSH isn't responding or Caddy
 # isn't active after 2 min, we know the cloud-init or the package install
@@ -80,22 +93,22 @@ if (( SECONDS >= CADDY_PRECHECK_TIMEOUT )); then
 fi
 
 # ---- 3. Phase 1: wait for the front door to return any HTTP 2xx/3xx (not 502/refused) ----
-log "Phase 1: stack readiness (https://$DOMAIN) up to ${STACK_TIMEOUT}s"
+log "Phase 1: stack readiness ($COLMENA_SCHEME://$DOMAIN) up to ${STACK_TIMEOUT}s"
 SECONDS=0
 PHASE1_OK=0
 LAST_CODE="000"
 LAST_502_LOG=-90  # so the first 502 print happens immediately
 while (( SECONDS < STACK_TIMEOUT )); do
   CODE=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 \
-    --resolve "$DOMAIN:443:$DROPLET_IP" \
-    "https://$DOMAIN/" 2>/dev/null || echo "000")
+    "${CURL_RESOLVE_ARGS[@]}" \
+    "$COLMENA_SCHEME://$DOMAIN/" 2>/dev/null || echo "000")
   LAST_CODE=$CODE
   case "$CODE" in
     2*|3*|4*)  # 4xx counts as "Caddy is alive" -- the cert might be untrusted
                # (staging LE) and a client without -k/ignoreHTTPSErrors would
                # see 403. Real reachability of the upstream is checked in phase 2.
       PHASE1_OK=1
-      ok "phase 1: HTTPS responded with $CODE after ${SECONDS}s"
+      ok "phase 1: $COLMENA_SCHEME responded with $CODE after ${SECONDS}s"
       break
       ;;
   esac
@@ -110,19 +123,23 @@ fi
 # ---- 4. Phase 2: wait for the API to report ok ------------------------------------------------------------------
 # The API lives on its own subdomain (colmena-api.luandro.com). Derive it from terraform.
 API_DOMAIN=$(terraform -chdir="$WORKSPACE_ROOT/terraform" output -json 2>/dev/null \
-  | jq -r '.api_url.value // ""' 2>/dev/null | sed 's|https://||' || true)
+  | jq -r '.api_url.value // ""' 2>/dev/null | sed -E 's|^https?://||' || true)
 if [[ -z "$API_DOMAIN" ]]; then
   # Fallback: assume /api/ is on the same domain as the frontend
   API_DOMAIN="$DOMAIN"
 fi
-log "Phase 2: API readiness (https://$API_DOMAIN/api/status/) up to ${API_TIMEOUT}s"
+CURL_API_RESOLVE_ARGS=()
+if [[ "$HOST_IS_IP" -eq 0 ]]; then
+  CURL_API_RESOLVE_ARGS=(--resolve "$API_DOMAIN:$RESOLVE_PORT:$DROPLET_IP")
+fi
+log "Phase 2: API readiness ($COLMENA_SCHEME://$API_DOMAIN/api/status/) up to ${API_TIMEOUT}s"
 SECONDS=0
 PHASE2_OK=0
 LAST_BODY=""
 while (( SECONDS < API_TIMEOUT )); do
   BODY=$(curl -sk --max-time 5 \
-    --resolve "$API_DOMAIN:443:$DROPLET_IP" \
-    "https://$API_DOMAIN/api/status/" 2>/dev/null || true)
+    "${CURL_API_RESOLVE_ARGS[@]}" \
+    "$COLMENA_SCHEME://$API_DOMAIN/api/status/" 2>/dev/null || true)
   LAST_BODY=$BODY
   if [[ -n "$BODY" ]] && echo "$BODY" | jq -e '.backend.status == "ok"' >/dev/null 2>&1; then
     PHASE2_OK=1
@@ -139,13 +156,20 @@ fi
 # ---- 5. Run Playwright e2e ----------------------------------------------------------------------------------------------------------
 # Derive the API URL from terraform output (or fall back to the frontend domain).
 API_URL=$(terraform -chdir="$WORKSPACE_ROOT/terraform" output -json 2>/dev/null \
-  | jq -r '.api_url.value // "https://$DOMAIN"' 2>/dev/null || echo "https://$DOMAIN")
-log "Run Playwright e2e (PLAYWRIGHT_BASE_URL=https://$DOMAIN, COLMENA_SERVER_URL=$API_URL, PLAYWRIGHT_DROPLET_IP=$DROPLET_IP)"
-export PLAYWRIGHT_BASE_URL="https://$DOMAIN"
+  | jq -r '.api_url.value // empty' 2>/dev/null || true)
+if [[ -z "$API_URL" ]]; then
+  API_URL="$COLMENA_SCHEME://$DOMAIN"
+fi
+log "Run Playwright e2e (PLAYWRIGHT_BASE_URL=$COLMENA_SCHEME://$DOMAIN, COLMENA_SERVER_URL=$API_URL, droplet_ip=$DROPLET_IP)"
+export PLAYWRIGHT_BASE_URL="$COLMENA_SCHEME://$DOMAIN"
 export COLMENA_SERVER_URL="$API_URL"
-# Bypass DNS in chromium too: map $DOMAIN -> $DROPLET_IP inside the browser's
-# resolver. Lets us run e2e before the A record has propagated.
-export PLAYWRIGHT_DROPLET_IP="$DROPLET_IP"
+# Bypass DNS in chromium for domain targets too: map the hostnames to the
+# droplet inside the browser's resolver. IP targets already bypass DNS.
+if [[ "$HOST_IS_IP" -eq 0 ]]; then
+  export PLAYWRIGHT_DROPLET_IP="$DROPLET_IP"
+else
+  unset PLAYWRIGHT_DROPLET_IP
+fi
 
 cd "$WORKSPACE_ROOT/tests"
 if [[ ! -d node_modules ]]; then

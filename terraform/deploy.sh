@@ -40,13 +40,21 @@ if [[ ! -f terraform.tfvars ]]; then
 
   # Interactive prompts
   read -rp "DigitalOcean API token: " DO_TOKEN
-  read -rp "Domain name (e.g. luandro.com): " DOMAIN_NAME
-  read -rp "Frontend subdomain [colmena]: " FE_SUB
-  read -rp "API subdomain [colmena-api]: " API_SUB
+  read -rp "Domain name (blank for IP-only, no Let's Encrypt): " DOMAIN_NAME
+  if [[ -z "$DOMAIN_NAME" ]]; then
+    FE_SUB=""
+    API_SUB=""
+    LE_STAGING=true
+    TLS_MODE="none"
+  else
+    read -rp "Frontend subdomain [colmena]: " FE_SUB
+    read -rp "API subdomain [colmena-api]: " API_SUB
+    read -rp "Use Let's Encrypt staging? (true/false) [true]: " LE_STAGING
+    read -rp "TLS mode (blank = derive from staging answer) [production|staging|internal|none]: " TLS_MODE
+  fi
   read -rp "Region [nyc3]: " REGION
   read -rp "Droplet size [s-2vcpu-4gb]: " SIZE
   read -rp "SSH public key path [~/.ssh/id_rsa.pub]: " SSH_KEY
-  read -rp "Use Let's Encrypt staging? (true/false) [true]: " LE_STAGING
 
   # Write terraform.tfvars
   cat > terraform.tfvars <<EOF
@@ -58,6 +66,7 @@ region               = "${REGION:-nyc3}"
 droplet_size         = "${SIZE:-s-2vcpu-4gb}"
 ssh_public_key_path  = "${SSH_KEY:-~/.ssh/id_rsa.pub}"
 letsencrypt_staging  = ${LE_STAGING:-true}
+tls_mode             = "${TLS_MODE:-}"
 EOF
   info "Wrote terraform.tfvars"
 fi

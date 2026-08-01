@@ -5,8 +5,9 @@ variable "do_token" {
 }
 
 variable "domain_name" {
-  description = "The base domain registered in DigitalOcean (e.g. 'luandro.com'). Subdomains for frontend and API are created under this domain."
+  description = "The base domain registered in DigitalOcean (e.g. 'luandro.com'). Subdomains for frontend and API are created under this domain. Empty = IP-only deployment (no DNS records, no Let's Encrypt)."
   type        = string
+  default     = ""
 }
 
 variable "frontend_subdomain" {
@@ -55,4 +56,15 @@ variable "letsencrypt_staging" {
   description = "If true, Caddy uses the Let's Encrypt staging CA (untrusted by browsers). Set to false for a real, browser-trusted cert. NOTE: Let's Encrypt rate-limits to 5 certs per domain per 168h — if you hit this, use staging until the window resets."
   type        = bool
   default     = true
+}
+
+variable "tls_mode" {
+  description = "TLS mode for Caddy. One of: \"\" (derive from letsencrypt_staging: true->staging, false->production), \"production\", \"staging\", \"internal\" (self-signed, IP or domain), \"none\" (plain HTTP). IP-only deployments (domain_name = \"\") support only \"internal\" and \"none\"."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "production", "staging", "internal", "none"], var.tls_mode)
+    error_message = "tls_mode must be one of: \"\" (derive from letsencrypt_staging), \"production\", \"staging\", \"internal\", \"none\"."
+  }
 }

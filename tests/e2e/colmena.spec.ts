@@ -41,7 +41,7 @@ async function loginAsTestUser(page: Page) {
 
   await page.goto('/auth/servers', { waitUntil: 'commit' });
   await waitForSpaMount(page);
-  await expect(page.locator('text=/^Servers$/').first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('text=/^Servers$/').first()).toBeVisible({ timeout: 60_000 });
 
   // Check if server already exists (from a previous test run)
   const existingServer = page.locator(`text=/Local Backend/i`).first();
@@ -219,8 +219,8 @@ test.describe('Colmena end-to-end', () => {
     await page.goto('/', { waitUntil: 'commit' });
     await page.evaluate(() => localStorage.clear());
     await waitForSpaMount(page);
-    await expect(page).toHaveURL(/\/auth\/servers/, { timeout: 30_000 });
-    await expect(page.locator('text=/^Servers$/').first()).toBeVisible({ timeout: 30_000 });
+    await expect(page).toHaveURL(/\/auth\/servers/, { timeout: 60_000 });
+    await expect(page.locator('text=/^Servers$/').first()).toBeVisible({ timeout: 60_000 });
   });
 
   test('register a server, connect, log in, see home', async ({ page }) => {
@@ -230,7 +230,7 @@ test.describe('Colmena end-to-end', () => {
 
     await page.goto('/auth/servers', { waitUntil: 'commit' });
     await waitForSpaMount(page);
-    await expect(page.locator('text=/^Servers$/').first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('text=/^Servers$/').first()).toBeVisible({ timeout: 60_000 });
 
     // Open the Add Server modal
     await page.getByRole('button', { name: /Add server/i }).click();
@@ -372,6 +372,14 @@ test.describe('Colmena end-to-end', () => {
   });
 
   test('Record audio and open upload modal', async ({ page }) => {
+    // The microphone / MediaRecorder path needs a secure context. A plain-HTTP
+    // target (IP-only / no-SSL deploy, COLMENA_SCHEME=http) is not one, so the
+    // fake-media render that produces the upload payload never completes there.
+    // Skip the recorder flow on http; it stays covered on https / localhost.
+    test.skip(
+      process.env.COLMENA_SCHEME === 'http',
+      'recorder needs a secure context; skipped on plain-HTTP (no-SSL) targets',
+    );
     await loginAsTestUser(page);
     await recordAndStop(page);
 

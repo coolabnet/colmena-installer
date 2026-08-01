@@ -43,3 +43,8 @@ droplet_image = "ubuntu-24-04-x64"
 #            Use this for development and repeated teardown/apply cycles.
 #   false -> production CA; real cert, but you may hit rate limits on rapid cycling.
 letsencrypt_staging = true
+
+# TLS mode. Leave blank to derive from letsencrypt_staging, or use production,
+# staging, internal (self-signed), or none (plain HTTP). Leave domain_name blank
+# for an IP-only deployment; IP-only deployments support internal or none.
+tls_mode = ""

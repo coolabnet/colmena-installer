@@ -15,10 +15,16 @@ provider "digitalocean" {
 # Resolve ~ at the start so the data source and key upload work uniformly.
 locals {
   ssh_public_key_path = pathexpand(var.ssh_public_key_path)
+  resolved_tls_mode   = var.tls_mode != "" ? var.tls_mode : (var.letsencrypt_staging ? "staging" : "production")
+  scheme              = local.resolved_tls_mode == "none" ? "http" : "https"
+  has_domain          = var.domain_name != ""
+  frontend_host       = local.has_domain ? "${var.frontend_subdomain}.${var.domain_name}" : digitalocean_droplet.colmena.ipv4_address
+  api_host            = local.has_domain ? "${var.api_subdomain}.${var.domain_name}" : digitalocean_droplet.colmena.ipv4_address
 }
 
 data "digitalocean_domain" "this" {
-  name = var.domain_name
+  count = local.has_domain ? 1 : 0
+  name  = var.domain_name
 }
 
 # Find any existing SSH key with this name in the account. The plural data
@@ -55,18 +61,26 @@ resource "digitalocean_droplet" "colmena" {
   ]
 
   user_data = templatefile("${path.module}/cloud-init.yaml", {
-    domain              = var.domain_name
-    frontend_subdomain  = var.frontend_subdomain
-    api_subdomain       = var.api_subdomain
-    letsencrypt_staging = var.letsencrypt_staging
+    domain             = var.domain_name
+    frontend_subdomain = var.frontend_subdomain
+    api_subdomain      = var.api_subdomain
+    tls_mode           = local.resolved_tls_mode
   })
+
+  lifecycle {
+    precondition {
+      condition     = local.has_domain || !contains(["production", "staging"], local.resolved_tls_mode)
+      error_message = "Let's Encrypt (production/staging) requires a domain_name. For IP-only deployments use tls_mode = \"internal\" or \"none\"."
+    }
+  }
 
   tags = ["colmena", "installer", "terraform"]
 }
 
 # A record for the frontend subdomain (e.g. colmena.luandro.com).
 resource "digitalocean_record" "frontend_a" {
-  domain = data.digitalocean_domain.this.id
+  count  = local.has_domain ? 1 : 0
+  domain = data.digitalocean_domain.this[0].id
   type   = "A"
   name   = var.frontend_subdomain
   value  = digitalocean_droplet.colmena.ipv4_address
@@ -75,7 +89,8 @@ resource "digitalocean_record" "frontend_a" {
 
 # A record for the API subdomain (e.g. colmena-api.luandro.com).
 resource "digitalocean_record" "api_a" {
-  domain = data.digitalocean_domain.this.id
+  count  = local.has_domain ? 1 : 0
+  domain = data.digitalocean_domain.this[0].id
   type   = "A"
   name   = var.api_subdomain
   value  = digitalocean_droplet.colmena.ipv4_address
