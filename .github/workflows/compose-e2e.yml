@@ -1,0 +1,87 @@
+name: compose-e2e
+
+# Bring up the full stack with `docker compose up` from a clean checkout and run
+# the Playwright e2e suite against it. This is the gate that proves TASK-3's
+# one-command flow actually works (boot ordering, seeds, Caddy routing).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # backend/, frontend/, and colmena-devops/ are SEPARATE repos — git-ignored
+      # here, not submodules — that the Dockerfiles' build contexts (backend.Dockerfile
+      # COPYs backend/, frontend.Dockerfile COPYs frontend/) and the nextcloud/mailcrab
+      # images need on disk before `docker compose build` can run. Reuse the proven
+      # clone stage (scripts/05-clone.sh) instead of re-deriving repo URLs/branches
+      # here; COLMENA_CLONE_PROTO=https avoids needing an SSH key on the runner.
+      - name: Clone backend/frontend/colmena-devops
+        env:
+          COLMENA_CLONE_PROTO: https
+        run: bash scripts/05-clone.sh
+
+      - name: Set up Node (for the Playwright runner)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build + start the stack
+        run: |
+          cp .env.example .env
+          docker compose up -d --build
+          docker compose ps
+
+      - name: Wait for backend API + frontend
+        run: |
+          echo "waiting for backend /api/status/ ..."
+          for i in $(seq 1 90); do
+            if curl -fsS http://localhost:8000/api/status/ 2>/dev/null | grep -q '"ok"\|ok'; then
+              echo "backend ready"; break
+            fi
+            sleep 4
+          done
+          curl -fsS http://localhost:8000/api/status/ || (echo "backend never became ready"; docker compose logs backend; exit 1)
+          echo "waiting for frontend via Caddy ..."
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8090/ || true)
+            if [ "$code" = "200" ] || [ "$code" = "304" ]; then echo "frontend ready ($code)"; break; fi
+            sleep 4
+          done
+
+      - name: Install Playwright
+        working-directory: tests
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run e2e suite
+        working-directory: tests
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:8090
+          COLMENA_SERVER_URL: http://localhost:8000
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: tests/playwright-report/
+          retention-days: 7
+
+      - name: Dump docker logs on failure
+        if: failure()
+        run: docker compose logs --tail=200
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
