@@ -1,0 +1,233 @@
+# Colmena — full stack in one `docker compose up`.
+#
+# KISS design (see .sj/plan-task3.md): reuse the proven infra service definitions
+# from colmena-devops/devops/local/docker-compose.yml and the proven stage-30
+# backend seed sequence, wrapped in container entrypoints. Single host: Caddy
+# serves the SPA at `/` and proxies `/api/*` to Django (same-origin, no CORS).
+#
+# Quick start (no host pyenv/node needed):
+#   cp .env.example .env        # optional — every var has a working default
+#   docker compose up -d --build
+#   # app at http://localhost:8090  (backend API also on http://localhost:8000)
+#
+# NOTE: Caddy defaults to host port 8090 (not 80) so it works under rootless
+# Docker, which cannot bind privileged ports (<1024) without a sysctl change.
+#
+# Tear down (wipes data):  docker compose down -v
+
+services:
+  # --------------------------------------------------------------------------
+  # Postgres
+  # --------------------------------------------------------------------------
+  postgres:
+    image: postgres:13
+    command: postgres -c 'max_connections=10000'
+    container_name: colmena_postgres
+    hostname: ${POSTGRES_HOSTNAME:-postgres}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USERNAME:-colmena}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-colmena}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      colmena_devops:
+        aliases:
+          - postgres
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USERNAME:-colmena}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # --------------------------------------------------------------------------
+  # pgAdmin (DB admin UI) — http://localhost:5050
+  # --------------------------------------------------------------------------
+  pgadmin:
+    container_name: colmena_pgadmin
+    image: dpage/pgadmin4:latest
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_DEFAULT_EMAIL:-admin@colmena.local}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_DEFAULT_PASSWORD:-colmena}
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      colmena_devops:
+        aliases:
+          - pgadmin
+    restart: unless-stopped
+    depends_on:
+      - postgres
+
+  # --------------------------------------------------------------------------
+  # Mailcrab (SMTP sink) — UI http://localhost:1080, SMTP :1025
+  # --------------------------------------------------------------------------
+  mail:
+    container_name: colmena_mail
+    image: colmena_mail
+    build:
+      context: colmena-devops/devops/apps/mailcrab
+      dockerfile: builder/Dockerfile
+      args:
+        - MAILCRAB_VERSION=latest
+    ports:
+      - "${MAIL_UI_PORT:-1080}:1080"
+      - "${MAIL_SMTP_PORT:-1025}:1025"
+    networks:
+      colmena_devops:
+        aliases:
+          - mail
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # Nextcloud — OCS :8003, API wrapper :8004 (proven colmena-devops build)
+  # --------------------------------------------------------------------------
+  nextcloud:
+    container_name: colmena_nextcloud
+    image: colmena_nextcloud
+    build:
+      context: colmena-devops/devops/apps/nextcloud/
+      dockerfile: builder/Dockerfile
+      args:
+        BUILD_CONTEXT: builder
+        NEXTCLOUD_VERSION: ${NEXTCLOUD_VERSION:-28.0.3}
+        NEXTCLOUD_API_WRAPPER_PORT: ${NEXTCLOUD_API_WRAPPER_PORT:-5001}
+        APACHE_APP_PATH: ${APACHE_APP_PATH:-/var/www/nc_api_wrapper}
+    privileged: true
+    networks:
+      colmena_devops:
+        ipv4_address: 172.20.0.10
+        aliases:
+          - nextcloud
+    volumes:
+      - nextcloud_data:/var/www/html
+    ports:
+      - "${NEXTCLOUD_PORT:-8003}:80"
+      - "${NEXTCLOUD_API_PORT:-8004}:5001"
+    environment:
+      - SQLITE_DATABASE=nextcloud
+      - NEXTCLOUD_TRUSTED_DOMAINS=${NEXTCLOUD_TRUSTED_DOMAINS:-nextcloud}
+      - NEXTCLOUD_ADMIN_USER=${NEXTCLOUD_ADMIN_USER:-superadmin}
+      - NEXTCLOUD_ADMIN_PASSWORD=${NEXTCLOUD_ADMIN_PASSWORD:-some-password}
+    restart: unless-stopped
+    # Advisory only — nothing gates on it (backend uses service_started). curl OR
+    # wget so it works regardless of which the built image ships; if neither is
+    # present it just reports unhealthy without blocking the stack.
+    healthcheck:
+      test: ["CMD-SHELL", "(curl -fsS http://localhost/status.php || wget -qO- http://localhost/status.php) 2>/dev/null | grep -q '\"installed\":true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # --------------------------------------------------------------------------
+  # Django backend — API on :8000. Entrypoint runs the proven stage-30 seed.
+  # --------------------------------------------------------------------------
+  backend:
+    container_name: colmena_backend
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    environment:
+      DJANGO_SETTINGS_MODULE: colmena.settings.dev
+      POSTGRES_HOSTNAME: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USERNAME: ${POSTGRES_USERNAME:-colmena}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-colmena}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-colmena_dev}
+      NEXTCLOUD_URL: http://nextcloud
+      # Django runtime reads these two (colmena/settings/base.py) — without them the
+      # Nextcloud integration and create_app_password() fail and the NC seed aborts.
+      # OCS is on :80, the API wrapper on :5001 inside the network.
+      NEXTCLOUD_API_URL: http://nextcloud
+      NEXTCLOUD_API_WRAPPER_URL: http://nextcloud:5001
+      NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER:-superadmin}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:-some-password}
+      SUPERADMIN_EMAIL: ${SUPERADMIN_EMAIL:-superadmin@domain.org}
+      SUPERADMIN_PASSWORD: ${SUPERADMIN_PASSWORD:-some-password}
+      BACKEND_HOSTNAME: ${BACKEND_HOSTNAME:-localhost:8000}
+      FRONTEND_HOSTNAME: ${FRONTEND_HOSTNAME:-localhost}
+      SPREED_VERSION: ${SPREED_VERSION:-18.0.11}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      # Shared with the nextcloud service so the entrypoint's spreed (Talk)
+      # tarball fallback can write straight into custom_apps/ when the Nextcloud
+      # app store is unreachable -- see backend-entrypoint.sh step 10.
+      - nextcloud_data:/nextcloud_data
+    networks:
+      colmena_devops:
+        aliases:
+          - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # service_started (not service_healthy): the nextcloud image's curl/health
+      # probe isn't guaranteed, and gating on it could deadlock the stack. The
+      # backend entrypoint polls the Nextcloud OCS API itself (up to ~2 min) before
+      # running the NC seed, so it doesn't need compose to prove NC healthy.
+      nextcloud:
+        condition: service_started
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # React frontend (Vite dev) — :5173 inside the network, served via Caddy.
+  # --------------------------------------------------------------------------
+  frontend:
+    container_name: colmena_frontend
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    environment:
+      OPENAPI_SCHEMA_LOCATION: http://backend:8000/api/schema/
+      FRONTEND_PORT: "5173"
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    networks:
+      colmena_devops:
+        aliases:
+          - frontend
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # Caddy — single host: SPA at /, API at /api/* (same-origin).
+  # --------------------------------------------------------------------------
+  caddy:
+    container_name: colmena_caddy
+    image: caddy:2
+    ports:
+      - "${HTTP_PORT:-8090}:80"
+      - "${HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      colmena_devops:
+        aliases:
+          - caddy
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+
+networks:
+  colmena_devops:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  pg_data:
+  pgadmin_data:
+  nextcloud_data:
+  caddy_data:
+  caddy_config:

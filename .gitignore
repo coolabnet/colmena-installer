@@ -28,6 +28,9 @@ email_update.md
 *.swp
 *.swo
 
+# Local docker-compose overrides (see .env.example for the template)
+.env
+
 # OS
 .DS_Store
 Thumbs.db

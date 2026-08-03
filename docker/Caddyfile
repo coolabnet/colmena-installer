@@ -1,0 +1,12 @@
+# Colmena compose — single-host Caddyfile.
+# Handle blocks are byte-identical in spirit to install.sh: /api/* proxies to the
+# Django backend, everything else proxies to the Vite dev frontend. Same-origin,
+# so no CORS and no second subdomain. Plain HTTP for local dev (no tls block).
+:80 {
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+    handle {
+        reverse_proxy frontend:5173
+    }
+}
