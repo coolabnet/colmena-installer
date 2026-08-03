@@ -122,6 +122,25 @@ bash run-stack.sh down     # teardown only
 | `SKIP_BUILD` | `0` | Set to `1` to skip Vite production build |
 | `KEEP_DATA` | `0` | Set to `1` to keep Docker volumes on teardown |
 
+## Local development with Docker Compose (one command)
+
+No host toolchain needed (no pyenv/Python/Node — only Docker and git). `backend/`,
+`frontend/`, and `colmena-devops/` are separate repos the Dockerfiles build from,
+so clone them first:
+
+```bash
+COLMENA_CLONE_PROTO=https bash scripts/05-clone.sh   # backend/, frontend/, colmena-devops/
+cp .env.example .env        # optional: every variable has a working default
+docker compose up -d --build
+```
+
+The full stack comes up behind Caddy at **http://localhost:8090** (backend API also
+on `http://localhost:8000`), seeded with `testuser@domain.org` / `testpassword123`.
+`docker compose down -v` wipes data; re-`up` is idempotent. See **[`DOCKER.md`](DOCKER.md)**
+for the service list, boot ordering, and env knobs. The CI workflow
+`.github/workflows/compose-e2e.yml` brings the stack up this way and runs the
+Playwright e2e suite against it.
+
 ## Advanced: managed DigitalOcean deploy (Terraform)
 
 If you'd rather have infrastructure provisioned for you, the Terraform path spins up a DigitalOcean droplet. Set `domain_name` to a DigitalOcean-managed base domain to configure DNS and serve across **two subdomains** (`colmena.<domain>` + `colmena-api.<domain>`), or leave `domain_name = ""` for an IP-only deployment with no DNS records or Let's Encrypt:
