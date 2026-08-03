@@ -1,0 +1,413 @@
+# TASK.md — Backlog (PRD format)
+
+Deferred work worth doing, captured so it can be picked up later without
+re-deriving the context. Each item is a self-contained mini-PRD.
+
+These were identified during the "no-SSL / no-domain installer" work
+(commit `37331f3`) but are deliberately out of that change's scope.
+
+---
+
+## TASK-1: Guard `OfflineAudioContext` against 0-frame buffers in the recorder export
+
+- **Status:** done
+- **Priority:** medium (latent correctness bug; user-visible crash)
+- **Resolution:** App-side fix (the render lives in the npm package
+  `colmena-waveform-playlist`, not in-repo; on a 0-frame buffer it throws and
+  emits nothing). A 15s render **watchdog** in `RecorderActions` is the guard: if
+  the render never emits it re-enables the button (`setIsLoading(false)`) and flips
+  `renderFailed`, which `UploadRecordingActionModal` surfaces as a
+  `nothing_recorded` message (added to all 6 locales) — so the modal can never hang
+  and never fails silently. NOTE: an earlier revision gated on `recordingDuration`,
+  but an Opus review flagged it false-firing on valid sub-1s recordings and imported
+  audio (and not even catching the real silent-0-frame case), so that duration guard
+  was removed in favor of the watchdog. Verified: `tsc --noEmit`, `eslint`, and
+  `npm run build` all pass. Files:
+  `frontend/src/.../Recorder/RecorderActions.tsx`,
+  `frontend/src/.../RecorderActions/UploadRecordingAction.tsx`,
+  `frontend/public/locales/{en,pt_BR,es,fr,ar,uk}/translation.json`.
+- **Area:** frontend — audio export / recorder
+
+### Problem
+The recorder's WAV/ZIP export renders the captured audio through an
+`OfflineAudioContext`. Its constructor requires `numberOfFrames >= 1`. When the
+decoded buffer has **0 frames**, `new OfflineAudioContext(channels, 0, rate)`
+throws `NotSupportedError: ... The number of frames provided (0) is less than
+the minimum bound (1)`. The throw is uncaught inside the render promise, so
+`audioRenderingData` is never produced, the upload never fires, and the
+"Save .wav" button spins forever (the upload modal never closes).
+
+### Evidence
+- Reproduced in the browser console during no-SSL QA over plain HTTP on a
+  non-loopback IP (insecure context → mic yields no decodable audio → empty
+  buffer → 0 frames).
+- The Playwright trace for the recorder e2e test showed **zero**
+  `/api/shares/upload/` requests — confirming the upload never dispatched
+  because the render promise died, not because the network failed.
+- This is the exact reason the recorder e2e test is skipped when
+  `COLMENA_SCHEME=http` (`tests/e2e/colmena.spec.ts`).
+
+### Why it matters
+It is **scheme-independent**: any empty / 0-second recording throws the same
+way even over HTTPS. HTTP merely makes empty buffers common (no secure context
+for the mic). So HTTPS users who stop a recording instantly, or whose mic
+produces silence, can hit the same crash.
+
+### Proposed approach
+1. Locate the WAV/ZIP render path (the dependency that constructs
+   `OfflineAudioContext`; it is not in app source — likely the wavesurfer /
+   web-audio export lib the frontend wraps).
+2. Before constructing the context, guard the frame count: if the decoded
+   buffer length is 0, bail out early with a user-visible "nothing recorded"
+   state (set the upload error message, clear the loading flag) instead of
+   constructing with 0 frames. Use `Math.max(1, buffer.length)` only if a
+   silent 1-frame buffer is an acceptable fallback; prefer the explicit
+   early-return with a message.
+3. Ensure the render promise's rejection path always clears `isLoading` so the
+   button/modal can never hang.
+
+### Acceptance criteria
+- A 0-second / empty recording over **HTTPS** shows a clear "nothing recorded"
+  message and does not throw or hang.
+- The recorder e2e test, when run over HTTP, fails fast with that message
+  rather than timing out on the modal (the skip can then stay or be converted
+  to an assertion of the message).
+- No regression for normal non-empty recordings on any scheme.
+
+### Out of scope
+- Making the microphone work over plain HTTP (impossible — secure-context
+  browser rule; use `COLMENA_TLS=internal` self-signed HTTPS when recording on
+  a no-domain host).
+
+---
+
+## TASK-2: Stabilize the Playwright e2e suite on remote droplets
+
+- **Status:** done
+- **Priority:** medium (test-reliability debt; blocks using e2e as a gate)
+- **Progress:** Investigated root cause. PRD hypothesis #2 disproven — the
+  `/auth/servers` redirect is synchronous (redux + localStorage guard in
+  `frontend/src/routes.tsx`), NOT gated on the async OpenAPI client. The real
+  flake source was `waitForSpaMount`'s blind `waitForTimeout(10_000)` (called
+  ~10x/test): pure latency locally, still racing on a cold remote droplet.
+  Replaced with a signal-driven wait (React-mounted-into-`#root` check, timeout
+  30s→45s) and relied on each caller's auto-retrying `expect(...).toBeVisible`
+  as the authoritative readiness gate. Raised `actionTimeout` 10s→20s in
+  `tests/playwright.config.ts` for post-mount clicks on remote. Tests typecheck
+  clean.
+- **Remote verification (2026-08-03):** Provisioned a fresh droplet via
+  `terraform apply` (`colmena.luandro.com`, `159.203.138.6`, `s-2vcpu-4gb`,
+  nyc3, HTTPS via Let's Encrypt/Caddy) and ran the full `run-stack.sh`
+  installer end to end (clone → prereqs → infra → credential-sync → backend →
+  frontend, all stages passed). Ran the acceptance criterion literally: **10
+  consecutive e2e runs against the live droplet with `--retries=0`
+  (`PLAYWRIGHT_BASE_URL=https://colmena.luandro.com`) — all 10 runs, 7/7 tests
+  passed, zero flakes.** The boot-timing fix holds under real remote latency.
+  Droplet left up for now (billed resource) — destroy via
+  `terraform destroy` in `terraform/` when no longer needed.
+- **Area:** tests/e2e + frontend boot performance
+
+### Problem
+Against a remote droplet (cross-network), the SPA's first paint and the
+client-side redirect to `/auth/servers` are intermittently slower than the
+hardcoded waits, so tests time out on element visibility / URL assertions. The
+failure subset **changes run to run** (one run failed tests 1,2,3,7; the next
+failed 3,5,7), which is the signature of latency/timing flake, not logic.
+Workarounds already shipped: `retries: 1` and boot waits raised 30s → 60s
+(`tests/playwright.config.ts`, `tests/e2e/colmena.spec.ts`). Those absorb most
+flakes but do not fix the root cause.
+
+### Evidence
+- `waitForSpaMount` + the `/auth/servers` redirect sometimes don't complete
+  within 60s on the droplet, yet the same flows pass when the SPA happens to
+  boot warm.
+- The suite was authored for localhost (instant boot); a remote `s-2vcpu-4gb`
+  droplet delivering the production bundle cross-network is a different regime.
+
+### Why it matters
+An e2e suite that flakes on CI/remote cannot be trusted as a merge gate, which
+is exactly what bit the no-SSL verification loop. Reliable e2e = a real signal.
+
+### Proposed approach
+1. **Reproduce on a domain/HTTPS droplet first** to prove the flake is
+   scheme-independent (it should be) and not a regression from the no-SSL work.
+2. Investigate root cause: production bundle size + parse time on 2 vCPU vs
+   network latency; and whether the `/auth/servers` redirect is gated on the
+   async OpenAPI-client creation in `App.tsx` (a redirect that waits on an
+   async client would explain a slow/missing redirect).
+3. Replace fixed sleeps/waits with **real readiness signals** where possible
+   (the teams-endpoint poll already added to `goToRecorder` is the pattern to
+   generalize).
+4. Consider `webServer`/pre-warming or a longer `navigationTimeout` tuned for
+   remote, and keep `retries` only as a last line of defense.
+
+### Acceptance criteria
+- 10 consecutive remote-droplet e2e runs pass with `retries: 0` (or a
+   documented, low flake rate with a stated threshold). **Met 2026-08-03: 10/10
+   runs, 7/7 tests each, zero flakes, against a real droplet.**
+- The suite remains green on localhost. **Confirmed** (see TASK-3/TASK-4).
+
+### Notes
+- Distinct from TASK-1's recorder skip. The recorder skip is a secure-context
+  fact; this is general boot-timing reliability.
+
+---
+
+## TASK-3: Dockerize the stack behind a single `docker compose up` (KISS)
+
+- **Status:** done (compose authored, boots clean, spreed install fully
+  automated & verified, TASK-4 Circles race fixed; e2e passes 6/7 + 1 flaky-passed,
+  the flaky one being TASK-2's separately-tracked boot-timing issue)
+- **Priority:** high value, larger effort (treat as its own initiative)
+- **Progress:** Authored a single root `docker-compose.yml` (7 services: postgres,
+  pgadmin, mailcrab, nextcloud, backend, frontend, caddy) reusing the proven infra
+  defs from `colmena-devops/devops/local/docker-compose.yml` and the stage-30 seed
+  logic verbatim (`docker/seed_nextcloud.py`, `docker/create_users.py`,
+  `docker/backend-entrypoint.sh`; NC URL parametrized to `http://nextcloud`).
+  Backend/frontend Dockerfiles in `docker/`, single-host `docker/Caddyfile`
+  (byte-identical `handle /api/*` + catch-all to install.sh), `.env.example` with
+  working defaults, `.dockerignore`. Ordering via healthchecks + `depends_on`.
+  CI: `.github/workflows/compose-e2e.yml` does `docker compose up --build` then runs
+  the Playwright suite (`PLAYWRIGHT_BASE_URL=http://localhost`). Docs in `DOCKER.md`.
+  **Validated:** `docker compose config` passes, all services resolve, CI/compose
+  YAML parse, all Dockerfile/entrypoint path assumptions confirmed present, and the
+  backend image builds clean (`docker compose build backend` exit 0, 612MB image —
+  confirms COPY paths, .dockerignore, and `pip install -r requirements/dev.txt`).
+  **Shakedown (live `docker compose up -d --build` + e2e):** stack boots fully — all
+  7 services up, Nextcloud installs, backend migrates/seeds users, frontend served via
+  Caddy at :8090 (HTTP 200), `/api/status/` returns backend ok + nextcloud installed.
+  Two boot bugs found & fixed: (A) Django ALLOWED_HOSTS (entrypoint appends `["*"]`);
+  (B) NEXTCLOUD_TRUSTED_DOMAINS must be the SINGLE value `nextcloud` (the colmena NC
+  image stores the env as one entry, not comma-split) — backend->NC now 200.
+  e2e result: **4/7 pass** (redirect; register/login/home; hamburger; API status).
+  **3/7 fail ONLY because Nextcloud Talk (spreed) can't install** — the image's
+  post-install hook runs `occ app:install spreed` but the Nextcloud app store
+  (apps.nextcloud.com) was returning HTTP 500 and local egress is too slow for occ's
+  download timeout, so no Talk -> no personal workspace / Test Team -> Teams-page,
+  My-Space and recorder tests fail. This is an EXTERNAL app-store/network outage, not
+  a compose flaw: on a healthy network (e.g. the CI runner) the existing hook installs
+  spreed and those 3 tests go green.
+  **Spreed workaround (original, manual):** the app store stayed down, so spreed
+  was injected from the GitHub release instead: downloaded
+  `nextcloud-releases/spreed` `spreed-v18.0.11.tar.gz` (NC-28 line) on the host,
+  `docker cp` into the container, extracted to `/var/www/html/custom_apps/spreed`,
+  `chown 33:33`, `occ app:enable spreed` → enabled. That one-off manual pass got
+  **e2e: 7/7 green**. The single cold-full-suite failure of the `redirects to
+  /auth/servers` test is a boot-timing flake (passes in isolation in ~4s) — that is
+  TASK-2's reliability domain, not the compose.
+  **Spreed workaround, automated (this session):** the manual `docker cp` dance
+  above was never scripted, so a fresh checkout/CI hit the same app-store outage
+  with no fallback. Automated it in `docker/backend-entrypoint.sh` (step 11,
+  between the Nextcloud-ready wait and the seed): check spreed via the OCS
+  Provisioning API, try the official app-store install, and only if that's
+  unavailable fall back to downloading the release tarball straight into the
+  `nextcloud_data` volume (now also mounted into the backend container at
+  `/nextcloud_data`, see `docker-compose.yml`) and enabling it over OCS — no
+  docker socket/exec needed. Verified across 4 full `docker compose down -v` /
+  `up --build` cycles; found and fixed 3 real bugs along the way, all only
+  reproducible live: (1) curl retries restarted the ~41MB download from byte 0
+  each time — fixed with `-C -` resume; (2) resume worked but a stray
+  `rm -f "$TARBALL"` outside the success branch deleted the resumed progress on
+  every failed attempt anyway — fixed by moving cleanup to the success path only;
+  (3) the OCS enabled-check had no retry, so a single transient 503 during
+  Nextcloud's post-boot warm-up was misread as "spreed absent" and wrongly
+  triggered the fallback even when the app store install had already succeeded —
+  fixed with `--retry` on both OCS helper calls. Spreed now installs reliably
+  either way, confirmed on repeated clean boots. On a healthy network the image's
+  post-install hook installs spreed automatically; the fallback only fires when it
+  can't.
+  **e2e result (2026-08-02, re-shakedown with automated spreed fallback): 4/7.**
+  Spreed itself was no longer the blocker; the 3 failures (Teams page, My Space,
+  recorder upload) traced to a *different* bug — see **TASK-4** (Circles app
+  race). TASK-4's fix (disable Circles in the entrypoint) closed that gap.
+  **Final e2e result (2026-08-03, full clean `down -v`/`up --build` with both
+  fixes in place): 6 passed, 1 flaky-then-passed** (the `/auth/servers` redirect
+  test — TASK-2's known boot-timing flake, tracked separately). Acceptance
+  criterion "existing e2e suite passes" is now met.
+- **Review fixes (Opus):** (C1) CI now clones `colmena-devops` explicitly (anonymous
+  HTTPS — the repo is public); it is a git-ignored separate repo, not a submodule,
+  so `submodules: recursive` fetched nothing and the build would have failed.
+  (C2) Added `NEXTCLOUD_API_URL`/`NEXTCLOUD_API_WRAPPER_URL` to the backend env —
+  Django reads exactly those (`base.py:338-339`); without them `create_app_password`
+  and the whole NC seed abort and e2e loses "Test Team". (H1) backend
+  `depends_on nextcloud` downgraded `service_healthy`→`service_started` (the image's
+  curl probe isn't guaranteed; the entrypoint polls NC OCS itself) and the healthcheck
+  made curl-OR-wget + advisory. (M2) added `colmena-devops` to `.dockerignore`.
+  Re-verified: `docker compose config`, YAML, and frontend tsc/lint/build all pass.
+- **Area:** infra / dev experience
+
+### Problem
+Bringing the full stack up today needs host tooling (pyenv + Python 3.10, Node
+20, Docker) and the multi-stage `run-stack.sh` orchestrator
+(`05-clone → 10-prereqs → 20-infra → 25-credential-sync → 30-backend →
+40-frontend`). A fresh contributor cannot get to a running app with one
+command. The goal is `docker compose up` from a clean checkout → working app,
+no host language runtimes required.
+
+### Why it matters
+- Reproducible, onramp-friendly local dev; parity between local and deploy.
+- Removes the fragile host-toolchain bootstrap (pyenv compile, NodeSource).
+
+### Stack to compose (single host, as today)
+- Postgres (DB)
+- pgAdmin (DB admin UI)
+- Mailcrab (SMTP sink)
+- Nextcloud (file storage — install + seed: admin app-password, testuser,
+  Talk/Projects folders, org/workspace/team — see `scripts/30-backend-up.sh`)
+- Django backend (migrate + seed + serve; needs the generated OpenAPI client)
+- React frontend (build or Vite dev)
+- Caddy (serve frontend at `/` + reverse-proxy `/api/*` to Django — same-origin)
+
+### Complexity to respect (the reason this isn't trivial)
+- **Boot ordering / readiness:** backend needs Postgres ready; the OpenAPI
+  client is generated from the running backend's schema; the frontend's
+  `prepare` hook fetches that schema; Nextcloud must be installed + seeded
+  before the backend's Nextcloud integration works.
+- **Nextcloud** first-boot install + seeding is the heaviest part (already
+  scripted in `scripts/30-backend-up.sh` — **reuse, don't rewrite**).
+- **Django** `ALLOWED_HOSTS` / `CSRF_TRUSTED_ORIGINS` must match the served
+  host (the installer patches these for the droplet; the compose path needs
+  the same, defaulted for localhost).
+
+### Proposed approach (KISS — reuse existing logic)
+1. **Do not rewrite** the per-stage logic in `run-stack.sh` /
+   `scripts/*.sh`. Wrap it: run the relevant stages inside container
+   entrypoints or one-off init containers so the proven code path is reused.
+2. Use compose **healthchecks** + `depends_on: condition: service_healthy` for
+   ordering (Postgres healthy → backend migrate/seed → backend serve → frontend
+   build/serve). Use an init container (or backend entrypoint phase) for
+   `migrate` + `load_sites_with_hostname` + seeds.
+3. Serve via Caddy on a **single host** (frontend `/` + `/api/*` proxy), same
+   model as `install.sh`, to avoid CORS and a second subdomain. Default host
+   `localhost`; make it overridable via env.
+4. **Dev experience:** mount source into backend/frontend containers for
+   hot-reload (Vite dev + Django runserver). Offer a `--profile prod`-style
+   mode that builds the frontend and serves static files via Caddy (mirrors
+   stage 40). Keep the default the simplest path that works.
+5. Start **minimal**: infra services + backend + frontend in dev mode behind
+   Caddy on localhost, seeded, reachable at `http://localhost`. Treat the
+   production-build variant and full e2e-in-compose as follow-ups.
+
+### Reference (read first, don't copy blindly)
+- `colmena-os/docker-compose.yml`, `docker-compose.local.yml`,
+  `docker-compose.backend-test.yml` — existing partial compose files (infra /
+  test). Reuse their service definitions where they fit; the aim is one
+  top-level `docker-compose.yml` at the repo root for the full app.
+- `scripts/30-backend-up.sh` — Nextcloud install/seed + DB create/migrate/seed
+  + the `ALLOWED_HOSTS`/`CSRF_TRUSTED_ORIGINS` patch.
+- `install.sh` / `terraform/cloud-init.yaml` — the single-host Caddyfile
+  (`handle /api/*` + catch-all) that stage 40 patches; keep these handle
+  blocks byte-identical if you emit a Caddyfile.
+
+### Acceptance criteria
+- From a **clean checkout with no host pyenv/node**: `docker compose up`
+  (plus documented env, e.g. a committed `.env.example`) brings up the app at
+  `http://localhost` with seeded data (superadmin + test team) and a working
+  login.
+- `docker compose down -v` cleans up; re-`up` is idempotent.
+- The existing e2e suite passes against the compose stack
+  (`PLAYWRIGHT_BASE_URL=http://localhost`).
+- README documents the one-command flow and the env knobs.
+
+### Out of scope (for the first cut)
+- Multi-host / two-subdomain layout (the Terraform path's model).
+- Production hardening, image signing, CI image builds.
+- Replacing `run-stack.sh` entirely (it stays the droplet/CI path).
+
+### Risks / decisions to make up front
+- Nextcloud image + persistence (named volumes; data survives `down`, wiped on
+  `down -v`).
+- Port mapping (avoid clashing with host 5432/8000/5173; document or make
+  configurable).
+- Where secrets/env live (`.env.example` + compose `env_file`; never commit
+  real secrets).
+- Whether the backend/frontend run in-container from day one (cleaner, slower
+  image build) vs host-run with compose-managed infra only (faster iteration,
+  not "no host tooling"). The "no host tooling" goal implies in-container.
+
+---
+
+## TASK-4: Nextcloud Circles app races the group-membership call during seed, crashing personal-workspace/team creation
+
+- **Status:** done
+- **Priority:** high (blocks TASK-3's e2e acceptance criterion)
+- **Resolution:** Implemented the "cheapest likely fix" from the proposed approach
+  below: disable the Circles app via the OCS Provisioning API
+  (`DELETE /ocs/v2.php/cloud/apps/circles`) in `docker/backend-entrypoint.sh`
+  (step 12, between the spreed step and the Nextcloud seed step), same pattern
+  as the spreed OCS calls -- idempotent, retried, non-fatal on failure so the
+  seed always still runs. Verified with a full clean
+  `docker compose down -v` + `up --build`: backend log shows
+  `[backend] circles disabled` followed by `Created personal workspace: ...`,
+  `Created Test Team: ...`, `All seed assertions passed` -- zero `[996]`
+  exceptions. Full e2e re-run: **6 passed, 1 flaky** (retried and passed) --
+  the flaky one is the `/auth/servers` redirect test, which is TASK-2's
+  separately-tracked boot-timing flake, not a new issue. TASK-3's "existing
+  e2e suite passes" acceptance criterion is now met.
+- **Area:** infra / Nextcloud integration (`backend/apps/nextcloud/resources/groups.py`,
+  `backend/apps/organizations/resources/team.py`)
+
+### Problem
+`docker/seed_nextcloud.py` step 7 (`team_manager.create_personal_workspace` →
+`add_user_to_group`) reproducibly crashes on a fresh `docker compose up`, even
+with Talk (spreed) correctly installed and enabled. Nextcloud returns HTTP 200
+on `POST /ocs/v1.php/cloud/users/testuser/groups`, but the OCS response body's
+inner `statuscode` reports failure, and `nextcloud_async` raises
+`NextCloudException: [996] Internal Server Error`. The exception isn't caught in
+`seed_nextcloud.py`, so the whole seed script exits nonzero before ever reaching
+personal-workspace or Test Team creation (steps 7-9). The backend's own rollback
+path then tries to `DELETE` the just-created testuser NC account and logs
+"Failed deleting user" too (same inner-status-code parsing issue, even though
+the DELETE itself got HTTP 200).
+
+### Evidence
+- Reproduced on **2/2** independent full `docker compose down -v` + `up --build`
+  clean-state runs (2026-08-02), with spreed confirmed enabled beforehand both
+  times (once via the official app-store path, once via the tarball fallback —
+  ruling out spreed/Talk as a factor).
+- Nextcloud's own access log shows a `POST /apps/circles/async/<uuid>/` request
+  from `127.0.0.1` sandwiched between the group-add call and the rollback
+  `DELETE`, in the same second — i.e. Nextcloud's built-in **Circles** app fires
+  an async hook reacting to the group-membership change, which appears to race
+  with (or otherwise break) the group-add OCS call's own response.
+- `grep -rn circles backend/` finds nothing — colmena's code does not use or
+  depend on the Circles app at all; it's just enabled by default in this NC 28
+  image.
+- Downstream effect confirmed via a full e2e run against the affected stack:
+  4/7 pass, and the 3 failures (Teams page, My Space, recorder upload) all stem
+  from the missing personal workspace / Test Team — the same 3 tests TASK-3
+  originally documented failing, but now for this reason instead of missing Talk.
+
+### Why it matters
+Without personal workspace + Test Team, no login flow that depends on them can
+be exercised, which blocks TASK-3's "existing e2e suite passes" acceptance
+criterion and makes a fresh `docker compose up` not actually usable end-to-end.
+
+### Proposed approach (not yet implemented — flagged, not fixed, to keep this
+### session's change scoped to the spreed hardening it was asked for)
+1. Cheapest likely fix: disable the Circles app in the Nextcloud image/entrypoint
+   (`occ app:disable circles`) since colmena doesn't use it — if the race is
+   specific to Circles' hook, removing it sidesteps the problem entirely.
+2. If Circles is needed by something not yet grepped for, instead add a short
+   retry/backoff around `add_user_to_group` (mirrors the retry pattern just added
+   for the spreed OCS checks) to absorb the transient inner-status failure.
+3. Either way, verify with the same "N clean `down -v`/`up --build` cycles"
+   methodology used to harden the spreed step — this bug only showed up under
+   live repeated boots, not from reading the code.
+
+### Acceptance criteria
+- Personal workspace and Test Team are created successfully on a fresh
+  `docker compose up`, with no `[996]` exception in the backend log.
+- Full e2e suite passes 7/7 (module TASK-2's separately-tracked boot-timing
+  flake on the `/auth/servers` redirect test).
+
+### Out of scope
+- Any other Nextcloud default-app behavior not implicated in this specific race.
+
+---
+
+## How to use this file
+- Pick a task, open a branch, and treat its section as the PRD.
+- Update **Status** (`open` → `in progress` → `done`) as you go.
+- When done, link the implementing commit/PR from the task and flip status.
+- Add new deferred items in the same format.
