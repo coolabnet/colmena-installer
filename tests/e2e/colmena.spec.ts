@@ -19,18 +19,22 @@ async function setReactInputValue(page: Page, selector: string, value: string) {
 // HTML response is received, then we wait for React to hydrate via selectors.
 async function waitForSpaMount(page: Page) {
   await page.waitForLoadState('commit' as any);
-  // Give the SPA time to hydrate and render. On a remote droplet with a
-  // Vite dev server, module transforms are slow; wait for #root to populate.
-  // Use a longer timeout for remote droplets vs local.
-  await page.waitForFunction(() => {
-    const root = document.getElementById('root');
-    return root && root.children.length > 0;
-  }, { timeout: 30_000 }).catch(() => {});
-  // Extra wait for React hydration to complete — Vite module transforms on a
-  // remote droplet can be extremely slow (5-30s per module graph).
-  // 10s gives enough headroom for the full React + PatternFly + router stack
-  // to initialize on a 2-CPU droplet serving Vite dev mode.
-  await page.waitForTimeout(10_000);
+  // Wait for a REAL readiness signal instead of a fixed sleep: React has mounted
+  // content into #root. This resolves as soon as the app hydrates (fast on
+  // localhost / a warm boot) and waits up to 45s on a cold remote droplet with
+  // slow Vite module transforms. Authoritative route readiness is then asserted
+  // by each caller's own expect(...).toBeVisible({ timeout }) which auto-retries,
+  // so no blind sleep is needed here. (The old fixed 10s sleep was pure latency
+  // locally and still raced on remote — the source of the run-to-run flake.)
+  await page
+    .waitForFunction(
+      () => {
+        const root = document.getElementById('root');
+        return !!root && root.children.length > 0;
+      },
+      { timeout: 45_000 },
+    )
+    .catch(() => {});
 }
 
 // Full login flow: register server -> connect -> login -> reach /home

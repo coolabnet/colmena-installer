@@ -16,7 +16,7 @@ export default defineConfig({
     ignoreHTTPSErrors: true,
     headless: true,
     viewport: { width: 1280, height: 720 },
-    actionTimeout: 10_000,
+    actionTimeout: 20_000,
     navigationTimeout: 45_000,
     screenshot: 'on',
     video: 'on',
