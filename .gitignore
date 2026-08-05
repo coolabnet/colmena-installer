@@ -14,7 +14,6 @@ tests/playwright-report/
 tests/test-results/
 
 # Project documentation (not part of installer)
-AGENTS.md
 HANDOFF.md
 IN-PROGRESS.md
 QA.md
