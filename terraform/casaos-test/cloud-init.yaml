@@ -1,0 +1,14 @@
+#cloud-config
+# CasaOS test-host cloud-init. Installs CasaOS only (the official one-liner,
+# which itself installs Docker if missing). App-store registration and the
+# actual Colmena install happen afterward, driven from the local machine
+# over SSH/CLI/browser -- this file's only job is to get CasaOS running.
+
+package_update: true
+package_upgrade: false
+
+runcmd:
+  - 'curl -fsSL https://get.casaos.io | bash > /var/log/casaos-install.log 2>&1'
+  - 'echo CASAOS_INSTALL_DONE >> /var/log/casaos-install.log'
+
+final_message: "CasaOS test droplet cloud-init complete (see /var/log/casaos-install.log)."

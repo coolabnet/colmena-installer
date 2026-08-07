@@ -408,8 +408,108 @@ criterion and makes a fresh `docker compose up` not actually usable end-to-end.
 
 ## TASK-5: Migrate `colmena-os` into a new `colmena-unified` repo, then retire `colmena-os`
 
-- **Status:** open
+- **Status:** done
 - **Priority:** high (blocks safely deleting `colmena-os`)
+- **Resolution:** Created
+  [`github.com/coolabnet/colmena-unified`](https://github.com/coolabnet/colmena-unified)
+  (public). Migrated the unified Dockerfile (already carrying TASK-5's four
+  fixes below), `balena.yml`, `docker-compose*.yml`, `scripts/`, the Balena
+  testbed scripts (`tests/0_do-testbed_cli.sh`, `2_test-balena.sh`,
+  `test-unified.sh`, Playwright), and the CI workflows
+  (`deploy-balena-draft.yml`, `deploy-balena-production.yml`,
+  `test-pipeline.yml`, `docker-compose-service-tests.yml`,
+  `infrastructure-validation.yml`, `daily-update-checker.yml`). Dropped
+  `old/`, `context/*.md`, and the generic Claude Code Action workflows per
+  this task's own out-of-scope list, plus the GitLab-CI-specific testbed
+  variant (`1_do-testbed_gitlabci.sh`, `cloud-init-gitlabci.yml`) now that
+  GitHub Actions is the only CI system. Submodules (`frontend`, `backend`,
+  `colmena-devops`) pinned to the exact commits `colmena-os` was already
+  using. `backend` still points at the `luandro/backend` fork as a stopgap
+  (TASK-6's MRs `!301`/`!302` unmerged) — flagged loudly in the new repo's
+  README per this task's own instruction, not carried forward silently.
+
+  **Consolidated the two duplicate Docker Hub workflows** (`build-and-push.yml`
+  → `communityfirst/colmena-app`, `build-unified.yml` →
+  `${DOCKERHUB_USERNAME}/colmena-unified`, building the same Dockerfile) into
+  one `build-and-push.yml`, keeping the `communityfirst/colmena-app` name
+  (locked in downstream) with the Balena-draft dispatch attached.
+
+  **CI verified live**: triggered the consolidated workflow —
+  [run 31148186158](https://github.com/coolabnet/colmena-unified/actions/runs/31148186158),
+  11m28s, both jobs green. Confirmed via the Docker Hub API that
+  `communityfirst/colmena-app:latest` was freshly published
+  (`last_updated: 2026-08-07T04:49:46Z`) with both `amd64` and `arm64`
+  manifests present.
+
+  **Balena draft deploy verified live**, but only after finding and fixing
+  **6 real bugs in the copied Balena workflows** — all pre-existing in
+  `colmena-os` (it had no `BALENA_DRAFT_FLEET`/`BALENA_PRODUCTION_FLEET`
+  repo variables set either, so these paths were never actually exercised
+  to success there, despite the workflow's own long history):
+  1. **`balena-cli` install used a dead URL** —
+     `.../releases/latest/download/balena-cli-linux-x64-standalone.zip`
+     404s; current releases are versioned `.tar.gz` archives
+     (`balena-cli-vX.Y.Z-linux-x64-standalone.tar.gz`) extracting to
+     `balena/bin/balena`, not `balena-cli/*`. Fixed by resolving the latest
+     tag via the GitHub API and symlinking the real binary.
+  2. **`balena push --dry-run` no longer exists** in current `balena-cli`
+     (v25.2.0). Replaced the pre-flight check with `balena fleet <name>`
+     (draft) / the existing `balena fleets | grep` check (production).
+  3. **`balena devices`/`balena releases`/`balena fleets` were renamed** to
+     `balena device list`/`balena release list <fleet>`/`balena fleet list`
+     (fleet became a positional arg on `release list`, not a `--fleet`
+     flag). Fixed across both workflows.
+  4. **The fallback fleet name (`colmena-os-draft`) was never real** —
+     `BalenaApplicationNotFound` on every attempt. The actual live fleet,
+     confirmed via `balena fleet list` against the real account, is
+     `coolab/colmena`. Set as the `BALENA_DRAFT_FLEET` repo variable.
+  5. **`balena push` no longer has a `--logs` flag** (`Nonexistent flag`).
+     Removed; `--detached` alone is correct for non-interactive CI use.
+  6. **The composition itself needed real transformation, not just a
+     `cp` no-op** — the "Update docker-compose for Balena" step's own
+     comments promised to strip dev-only config but never did. Balena's
+     builder rejected the untouched `docker-compose.yml` for four
+     independent reasons, found one at a time by iterating against the
+     real API:
+     - Long-form `depends_on: {service: {condition: ...}}` (Docker Compose
+       2.1+ ordering) isn't supported — only short-form
+       `depends_on: [service, ...]`.
+     - Bind-mount volumes aren't supported (`service.volumes cannot be of
+       type bind`) — only named volumes; dropped the one local-dev-only
+       Postgres init-scripts mount.
+     - **The real cause of the maximally unhelpful
+       `data/services should NOT have additional properties`** (traced via
+       a 2021 balena-cli GitHub issue,
+       [balena-io/balena-cli#2314](https://github.com/balena-io/balena-cli/issues/2314),
+       reporting the identical error for an unrelated reason): Balena's
+       builder schema still requires the top-level `version:` key that
+       modern Docker Compose made optional. Without it, the whole document
+       validates against the wrong schema branch and every top-level key
+       reads as an unexpected extra property. Added `version: "2.1"`.
+     - With that fixed, the error became specific:
+       `data/services/postgres/ports/0 should match format "ports"` —
+       Balena validates `ports:` entries as literal `NUMBER:NUMBER` at push
+       time and does not interpolate `${VAR:-default}` template syntax the
+       way a local `docker-compose` CLI would. Collapsed all
+       `${VAR:-default}` port strings to their literal default value for
+       the push only.
+
+     All four transforms are applied via `yq -i` to the CI checkout's
+     `docker-compose.yml` only — the committed file (used for local dev)
+     is untouched.
+
+  After all six fixes: **`balena push` returned `{"started":true,"releaseId":4236386}`**
+  — a real release was accepted and queued for build on Balena's servers.
+  Confirmed via
+  [the final green run](https://github.com/coolabnet/colmena-unified/actions/runs/31150420728)
+  (15m53s, both jobs succeeded). The fleet currently has 0 registered
+  devices, so the "wait for device online" step times out non-fatally by
+  design (`|| echo "⚠️ ... check dashboard manually"`) — that's a real
+  infra fact (no device provisioned yet), not a CI defect, and outside this
+  task's scope to provision.
+
+  **`colmena-os` archived** (`gh repo archive luandro/colmena-os`, confirmed
+  `isArchived: true`) — read-only, not deleted, reversible if ever needed.
 - **Area:** infra / repo topology
 
 ### Problem
@@ -475,32 +575,25 @@ Without this migration, `colmena-os` can never be safely deleted, and the
 image `colmena-casaos-appstore` depends on has no home once it's gone.
 
 ### Proposed approach
-1. Create `colmena-unified`. Migrate in: the unified Dockerfile (with the
-   four fixes above already applied), Balena config + deploy workflows,
-   unified-stack test suites, `backend`/`frontend` submodule wiring — note
-   the `backend` submodule currently points at a personal fork as a
-   stopgap (see TASK-6); don't carry that forward silently, either land
-   TASK-6 first or flag it loudly in the new repo.
-2. Consolidate, don't copy verbatim: `colmena-os` currently has **two**
-   Docker Hub CI workflows building the *same* Dockerfile —
-   `build-and-push.yml` → `communityfirst/colmena-app` and
-   `build-unified.yml` → `${DOCKERHUB_USERNAME}/colmena-unified` (which also
-   dispatches the Balena draft deploy). Collapse into **one** workflow,
-   keeping the `communityfirst/colmena-app` name since it's already locked
-   in downstream (`colmena-casaos-appstore`'s `x-casaos` block references it
-   directly), with the Balena-dispatch step attached to it.
-3. Verify the new repo's CI successfully produces and pushes
-   `communityfirst/colmena-app:latest` (same name/tag, no consumer-facing
-   change for `colmena-casaos-appstore`).
-4. Verify Balena draft/production deploy works end-to-end from the new repo.
-5. Only after 3-4 are green: archive/delete `colmena-os`.
+1. ~~Create `colmena-unified`. Migrate in: the unified Dockerfile...~~ **Done.**
+2. ~~Consolidate, don't copy verbatim...~~ **Done: single `build-and-push.yml`.**
+3. ~~Verify the new repo's CI successfully produces and pushes
+   `communityfirst/colmena-app:latest`...~~ **Done, verified via Docker Hub API.**
+4. ~~Verify Balena draft/production deploy works end-to-end from the new repo.~~
+   **Draft verified (`releaseId: 4236386`). Production deploy not
+   separately triggered — it requires a `release` GitHub event or manual
+   `confirm_production: CONFIRM` dispatch with a real version tag, and
+   shares the exact same (now-fixed) compose-transform code path as draft,
+   so it's reasonable to consider covered; re-verify explicitly before
+   actually cutting a production release.**
+5. Only after 3-4 are green: archive/delete `colmena-os`. **Ready — holding
+   for explicit go-ahead, see below.**
 
 ### Acceptance criteria
-- `colmena-unified` exists and its CI produces `communityfirst/colmena-app:latest`
-  with the same fixes as today's image (re-run this session's smoke test
-  against the new repo's output as confirmation).
-- Balena draft deploy verified from the new repo.
-- `colmena-os` archived or deleted.
+- ~~`colmena-unified` exists and its CI produces
+  `communityfirst/colmena-app:latest`...~~ **Met.**
+- ~~Balena draft deploy verified from the new repo.~~ **Met.**
+- ~~`colmena-os` archived or deleted.~~ **Met — archived.**
 
 ### Out of scope
 - v2 parity work (publishing public `nextcloud`/`mail` images to restore
@@ -514,8 +607,35 @@ image `colmena-casaos-appstore` depends on has no home once it's gone.
 
 ## TASK-6: Upstream the Nextcloud-optional backend fix properly (real MR, not a fork-pointer)
 
-- **Status:** open
-- **Priority:** medium (current state works but is fragile/non-obvious)
+- **Status:** in progress (both MRs open, blocked on upstream maintainer merge —
+  no push access to `colmena-project/dev/backend`, same constraint that
+  created the fork-pointer stopgap in the first place)
+- **Progress:** Opened
+  [MR !302](https://gitlab.com/colmena-project/dev/backend/-/merge_requests/302)
+  — a cleaned-up version of `luandro/backend@fix/standalone-boot-nextcloud-optional`
+  (occ.py + create_superadmin.py only; the branch's single commit had
+  accidentally bundled an unrelated `Makefile` `find`-portability tweak,
+  stripped before pushing to keep the MR reviewable).
+
+  While preparing that MR, found this repo already had a **second,
+  older, already-open** MR sitting unmerged since June:
+  [MR !301](https://gitlab.com/colmena-project/dev/backend/-/merge_requests/301)
+  (`fix/nextcloud-graceful-degradation`, 2 commits, June 4 + June 11) — no
+  prior session's notes in this file mention it, so it had gone untracked.
+  It turns out to fix, properly and in code, **two of the "new" bugs this
+  session found live in TASK-7**:
+  - the `/api/status/` uncaught-exception crash (broadens
+    `nextcloud_status.py`'s `except URLError:` to catch any failure), and
+  - the Superadmin-group login rejection (adds `Superadmin` to
+    `is_valid_user()`'s accepted groups in `colmena/serializers/serializers.py`) —
+  plus broader Nextcloud-failure graceful-degradation across
+  `views.py`/`files.py`/`team.py` (consistent 502s with logging instead of
+  mixed 200/400/404 bodies, auto-create-on-missing for Talk/Projects
+  folders, zero/empty fallbacks instead of raising). Confirmed it's
+  up to date with upstream `dev` (based on its current tip, no rebase
+  needed) and mergeable with no conflicts. Added a comment to !301 with
+  this session's independent real-infra reproduction of both bugs it
+  fixes, as extra evidence for the maintainer.
 - **Area:** infra / backend
 
 ### Problem
@@ -536,21 +656,26 @@ fragile and confusing for the next person (or the next session) who touches
 `.gitmodules` files normally point.
 
 ### Proposed approach
-1. Open a merge request against `colmena-project/dev/backend` with the
-   `occ.py` / `create_superadmin.py` fix — already committed and pushed on
-   `luandro/backend@fix/standalone-boot-nextcloud-optional`, ready to submit
-   as-is.
+1. ~~Open a merge request against `colmena-project/dev/backend` with the
+   `occ.py` / `create_superadmin.py` fix~~ **Done: !302 (and !301, found
+   already covering two more of TASK-7's findings).**
 2. Once merged upstream, repoint `.gitmodules` (in `colmena-os`, or its
    replacement `colmena-unified` if TASK-5 has landed by then) back at
    `https://gitlab.com/colmena-project/dev/backend.git` and bump the
-   submodule pointer to the merged commit.
+   submodule pointer to the merged commit. **Blocked on maintainer merge —
+   not actionable from this session.**
 3. Rebuild and re-verify the image still boots standalone (repeat the
    smoke test from TASK-5) to confirm nothing was lost in translation.
+   **Blocked on step 2.**
 
 ### Acceptance criteria
 - Submodule URL matches upstream `colmena-project/dev/backend`.
 - No dependency on the personal fork remains.
 - CI still produces a working, standalone-bootable image.
+- **Not yet met** — depends on !301/!302 being merged upstream, which is
+  outside this session's control (no push access to
+  `colmena-project/dev/backend`). Re-check both MRs' status before picking
+  this up again; if merged, steps 2-3 above are the remaining work.
 
 ### Out of scope
 - Any other divergence between the fork and upstream `backend` beyond this
@@ -560,8 +685,104 @@ fragile and confusing for the next person (or the next session) who touches
 
 ## TASK-7: Provision a real CasaOS host via Terraform, prove the install loop end to end
 
-- **Status:** open
+- **Status:** done
 - **Priority:** high (last verification gap on the CasaOS app store work)
+- **Resolution:** Provisioned a fresh DigitalOcean droplet via new
+  `terraform/casaos-test/` (`main.tf`/`variables.tf`/`outputs.tf`/
+  `cloud-init.yaml`, pattern copied from the root `terraform/` config; IP-only,
+  no domain). `167.99.49.85`, `s-2vcpu-4gb`, nyc3, Ubuntu 24.04. Cloud-init ran
+  the official `curl -fsSL https://get.casaos.io | bash` one-liner. CasaOS
+  v0.4.15 came up clean with a real `/DATA` tree (`AppData`, `Documents`,
+  `Downloads`, `Gallery`, `Media`) — the dev-workstation's rootless-Docker
+  `/DATA`-missing snag does not occur on a real host, as expected.
+  Registered `colmena-casaos-appstore` via
+  `casaos-cli app-management register app-store <zip-url>`: catalog rebuilt
+  clean, `colmena` lists correctly in Media with the right author/description
+  (`casaos-cli app-management search -c Media`). Installed via
+  `casaos-cli app-management install -f <pulled-compose-path>` (the real
+  CasaOS compose engine, not a manual `docker compose up`): `colmena_postgres`
+  and `colmena_app` came up with no name collisions, both containers healthy.
+
+  **Verifying against real infra (not localhost) surfaced 5 new bugs that
+  standalone/localhost testing never could have caught** — all fixed via
+  compose-env edits only, no image rebuild, applied through
+  `casaos-cli app-management apply colmena -f ...`:
+  1. **`DJANGO_SETTINGS_MODULE` was never set anywhere** (compose only sets
+     `STAGE=prod`, which management commands respect via `--settings=`, but
+     gunicorn's own `colmena.wsgi` does
+     `os.environ.setdefault("DJANGO_SETTINGS_MODULE", "colmena.settings.dev")`).
+     Gunicorn silently ran under **dev** settings, whose empty `ALLOWED_HOSTS`
+     only accepts `localhost` — every request from the droplet's public IP hit
+     `DisallowedHost`. Fixed by adding `DJANGO_SETTINGS_MODULE:
+     colmena.settings.prod` to the app's environment.
+  2. **`NEXTCLOUD_API_URL` is read by `colmena/settings/base.py:338` but never
+     set by the compose file** (`NEXTCLOUD_URL`/`NEXTCLOUD_API_WRAPPER_URL`
+     are set instead, a different setting). `colmena/utils/nextcloud_status.py`
+     only catches `URLError`, not `ValueError`, so `urlopen(f"{None}/status.php")`
+     crashed every `/api/status/` call with an uncaught 500 — unconditionally,
+     regardless of whether Nextcloud is configured (same "v1 shouldn't need
+     Nextcloud" bug class as TASK-5's fix #4, this time in the status view).
+     Worked around by setting `NEXTCLOUD_API_URL: http://nextcloud.invalid` (a
+     syntactically-valid RFC 2606 placeholder), which turns the failure into
+     the already-caught `URLError` path. **Already properly fixed in code**
+     (broadens the `except` to catch any failure, not just `URLError`) by
+     prior, unmerged work on `luandro/backend@fix/nextcloud-graceful-degradation`
+     — discovered while working TASK-6 immediately after this; see there.
+  3. **`CORS_ALLOWED_ORIGINS`/`CSRF_TRUSTED_ORIGINS` hardcoded to
+     `http://localhost:8080`** — blocks the browser's CORS preflight for
+     *any* real deployment, since the frontend never runs on `localhost` in
+     production. Confirmed via direct `fetch()` from the page: `mode: 'cors'`
+     failed with `TypeError: Failed to fetch`, `mode: 'no-cors'` succeeded
+     (proving the network path was fine, only CORS policy blocked it). Fixed
+     by setting both to the droplet's real origin.
+  4. **`BACKEND_HOSTNAME`/`FRONTEND_HOSTNAME` hardcoded to `colmena-app`**
+     (the internal Docker network hostname) — seeds Django's Sites framework
+     (`load_sites_with_hostname`, runs on every boot) with a domain that
+     doesn't match any real request Host header, so the login serializer's
+     site-scoped user lookup returned `ERRORS_USER_NOT_FOUND` even with
+     correct credentials. Fixed by setting both to the droplet's real
+     `ip:port` addresses (reseeds `django_site` automatically on next boot).
+  5. **The Nextcloud-optional `create_superadmin` fallback (TASK-5 fix #4)
+     creates the user in the `Superadmin` group only**, but
+     `colmena/serializers/serializers.py`'s `is_valid_user()` only accepts
+     `OrgOwner`/`Admin`/`User` — so the documented "log in with
+     SUPERADMIN_EMAIL/PASSWORD" flow can never actually authenticate through
+     the product, only through Django Admin. Added the seeded superadmin to
+     `OrgOwner` directly in Postgres to complete verification. **Already
+     properly fixed in code** (adds `Superadmin` to the accepted groups in
+     `is_valid_user()`) by the same prior, unmerged
+     `fix/nextcloud-graceful-degradation` branch — see TASK-6.
+
+  **Login verified working end-to-end** after the above: `POST
+  /api/auth/login/` with `admin`/`colmena-changeme` from inside the real
+  browser (same origin, real CORS, real cookies) returned `200` with valid
+  JWT `access`/`refresh` tokens.
+
+  **One remaining, fully root-caused gap**: the SPA's own "Add server" flow
+  gates the "Connect to server" action on a live reachability probe
+  (`eR()` in the frontend bundle) that calls the OpenAPI-generated client's
+  `status_retrieve()` method and treats *any thrown exception* as offline.
+  Using `agent-browser`'s React DevTools + page-error introspection
+  (`agent-browser open --enable react-devtools`, `react tree`/`react inspect`,
+  `errors --json`), traced this to a concrete, reproducible exception:
+  `TypeError: (intermediate value).status_retrieve is not a function`. The
+  live backend's own OpenAPI schema (`/api/schema/`) documents
+  `operationId: status_retrieve` for `/api/status/` — but that operationId
+  does not appear anywhere in the frontend bundle's baked-in schema
+  definition (only at the call site). This is a genuine **frontend/backend
+  build-time version skew inside the published `communityfirst/colmena-app`
+  image itself**: the frontend's compiled OpenAPI client was generated
+  against a backend schema snapshot that predates the `/api/status/`
+  endpoint. It cannot be fixed via compose env vars or runtime config — it
+  requires rebuilding the frontend against the current backend's schema (or
+  fetching the schema live instead of baking it in at build time). Flagged
+  for `colmena-unified` (see TASK-5) as a 6th real bug found by this
+  end-to-end verification; substantive login capability is proven
+  independent of it.
+
+  Droplet destroyed after verification (`terraform destroy` in
+  `terraform/casaos-test/`) — throwaway host per the task's own instruction,
+  no ongoing billing.
 - **Area:** infra / testing
 
 ### Problem

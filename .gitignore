@@ -43,6 +43,14 @@ terraform/terraform.tfstate.backup
 terraform/crash.log
 terraform/crash.*.log
 terraform/*.tfplan
+terraform/casaos-test/.terraform/
+terraform/casaos-test/terraform.tfvars
+terraform/casaos-test/terraform.tfstate
+terraform/casaos-test/terraform.tfstate.*
+terraform/casaos-test/terraform.tfstate.backup
+terraform/casaos-test/crash.log
+terraform/casaos-test/crash.*.log
+terraform/casaos-test/*.tfplan
 
 # Workspace-internal planning docs (not part of the installer)
 plans/
