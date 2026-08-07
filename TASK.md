@@ -558,6 +558,72 @@ fragile and confusing for the next person (or the next session) who touches
 
 ---
 
+## TASK-7: Provision a real CasaOS host via Terraform, prove the install loop end to end
+
+- **Status:** open
+- **Priority:** high (last verification gap on the CasaOS app store work)
+- **Area:** infra / testing
+
+### Problem
+The CasaOS install flow was proven in two separate halves, not one
+continuous real run. The image was verified standalone via a bare
+`docker compose up` (migrations, seeds, superadmin, gunicorn, nginx all
+confirmed against the real published `communityfirst/colmena-app:latest`).
+Separately, a containerized CasaOS test harness (`dockurr/casa`, built from
+real upstream CasaOS source) confirmed the store registers, `colmena` lists
+correctly in the catalog with the right metadata, and a real install passes
+CasaOS's own compose validator and reaches the actual `docker compose up`
+call. But that second test never finished bringing up running, reachable
+containers *inside the CasaOS harness itself* — it hit two environment
+snags: our compose's hardcoded `container_name: colmena_postgres` collided
+with this dev workstation's own unrelated running `colmena-installer` stack
+(same name, unrelated project), and this workstation's rootless Docker setup
+has no real `/DATA` directory (real CasaOS hosts have one, set up by the
+official installer itself). Neither is a defect in the app, but neither
+proves the actual "click Install in CasaOS, watch it come up, log in from a
+browser" loop completes clean on a host that isn't this dev machine.
+
+### Why it matters
+Without this, "the CasaOS app store works" rests on two separately-verified
+halves plus reasoning about why they'd compose correctly together — solid,
+but not the same as watching it happen once, uninterrupted, on real
+infrastructure nobody has touched by hand.
+
+### Proposed approach
+Reuse this repo's existing `terraform/` setup (DigitalOcean provider,
+`digitalocean_droplet.colmena` resource, `cloud-init.yaml` provisioning
+pattern — see `terraform/main.tf`) as the template, the same pattern
+TASK-2 used for remote-droplet verification, but for a **plain host running
+real CasaOS** instead of the colmena-installer stack:
+
+1. New Terraform config (e.g. `terraform/casaos-test/`, or a variable-driven
+   variant of the existing setup) provisioning a small droplet on an OS
+   CasaOS officially supports, with `cloud-init` installing CasaOS on first
+   boot (`curl -fsSL https://get.casaos.io | sudo bash`).
+2. Once up, register `colmena-casaos-appstore` as a source
+   (`casaos-cli app-management register app-store <archive-zip-url>`, or the
+   web UI's Settings -> App Store -> Sources flow) and confirm `colmena`
+   lists correctly under Media.
+3. Install the app for real. A fresh droplet has no container-name
+   collisions and no rootless-Docker `/DATA` quirk, so this should exercise
+   the exact path a real user hits.
+4. Open the frontend from the droplet's public IP in a browser, log in with
+   the seeded superadmin credentials, confirm the dashboard loads.
+5. `terraform destroy` when done — this is a throwaway verification host,
+   not a resource to keep running and billing.
+
+### Acceptance criteria
+One continuous, unattended run: droplet provisioned → CasaOS installed →
+store registered → app installed via CasaOS's own UI or CLI → superadmin
+login succeeds in a real browser — no manual workarounds, on a host this
+session never touched.
+
+### Out of scope
+- ARM64/Raspberry Pi hardware testing — this is an x86 droplet only; real
+  ARM hardware verification stays a separate, lower-priority follow-up.
+
+---
+
 ## How to use this file
 - Pick a task, open a branch, and treat its section as the PRD.
 - Update **Status** (`open` → `in progress` → `done`) as you go.
