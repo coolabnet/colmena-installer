@@ -406,6 +406,158 @@ criterion and makes a fresh `docker compose up` not actually usable end-to-end.
 
 ---
 
+## TASK-5: Migrate `colmena-os` into a new `colmena-unified` repo, then retire `colmena-os`
+
+- **Status:** open
+- **Priority:** high (blocks safely deleting `colmena-os`)
+- **Area:** infra / repo topology
+
+### Problem
+`colmena-os` (github.com/luandro/colmena-os) is slated for retirement in
+favor of a 3-repo split — `colmena-installer` (this repo, unchanged),
+`colmena-unified` (new), `colmena-casaos-appstore` (new, already live at
+github.com/coolabnet/colmena-casaos-appstore) — but `colmena-os` still holds
+real, non-duplicated infrastructure. Deleting it today would lose all of it:
+
+- The **unified Dockerfile** (multi-stage: frontend + backend + nginx +
+  supervisord into one image) — the actual source of `communityfirst/colmena-app`,
+  the image `colmena-casaos-appstore` depends on.
+- **Balena support**: `balena.yml` (fleet config, device types, env defaults)
+  + `.github/workflows/deploy-balena-draft.yml` +
+  `deploy-balena-production.yml` — real fleet-deployment automation, not
+  trivial to rebuild if lost.
+- **Unified-stack test suites**: `test-pipeline.yml`,
+  `docker-compose-service-tests.yml`, `infrastructure-validation.yml`, and
+  `tests/` (Balena testbed scripts, `test-unified.sh`, Playwright).
+
+### Evidence the image/fixes actually work
+This session's smoke-testing already found and fixed four real bugs that
+blocked `communityfirst/colmena-app` from booting standalone (i.e. without a
+bundled Nextcloud, which is exactly what a lean CasaOS/Balena deployment
+needs):
+
+1. nginx never started — Alpine's stock `nginx.conf` only auto-includes
+   `/etc/nginx/http.d/*.conf`, but the Dockerfile copied the server block to
+   `/etc/nginx/conf.d/` (the Debian/Ubuntu convention). Fixed:
+   `colmena-os/Dockerfile`, `conf.d` → `http.d`.
+2. `gunicorn` didn't exist in the final image at all — the final Docker stage
+   only copied `site-packages` from the `backend-builder` stage, never
+   `/usr/local/bin` (where pip installs console scripts). Fixed: added
+   `COPY --from=backend-builder /usr/local/bin/gunicorn /usr/local/bin/gunicorn`.
+3. `DEBUG=false` crashed Django at import time (`settings/prod.py` does
+   `bool(int(os.environ.get("DEBUG", 0)))`, which only accepts `"0"`/`"1"`).
+   Fixed in `colmena-casaos-appstore`'s `Apps/Colmena/docker-compose.yml`
+   (now `DEBUG=0`), not the image itself — carry the same env-var convention
+   into whatever compose file `colmena-unified` ships for its own testing.
+4. `create_superadmin` crash-looped forever without a reachable Nextcloud —
+   it unconditionally calls Nextcloud's API to mint an app password, and the
+   generated OpenAPI client only wraps bad HTTP status codes, not connection
+   failures. Fixed at the source: `backend/apps/nextcloud/occ.py` (catch
+   `httpx.HTTPError`) + `backend/apps/accounts/management/commands/create_superadmin.py`
+   (fall back to an empty app password rather than crashing; the field is
+   `blank=True` and existing code already queries for this exact empty state —
+   see `apps/organizations/organizations.py`'s `{"user__nc_app_password": ""}`
+   filter — so an empty value isn't unprecedented, though it does mean
+   Nextcloud-dependent features silently no-op for that user until Nextcloud
+   becomes reachable).
+
+Verified twice: once via a from-scratch `docker compose up` against the
+republished `communityfirst/colmena-app:latest` (migrations, seeds,
+superadmin creation, gunicorn, nginx, container reporting `healthy`, curl
+200/301 on both frontend and backend), and again via a real CasaOS instance
+(`dockurr/casa`, built from actual upstream IceWhaleTech source components)
+registering the app store and driving the real install flow through to the
+`docker compose up` step. Whoever picks up TASK-5 should **carry these fixes
+into `colmena-unified`'s Dockerfile**, not rediscover them.
+
+### Why it matters
+Without this migration, `colmena-os` can never be safely deleted, and the
+image `colmena-casaos-appstore` depends on has no home once it's gone.
+
+### Proposed approach
+1. Create `colmena-unified`. Migrate in: the unified Dockerfile (with the
+   four fixes above already applied), Balena config + deploy workflows,
+   unified-stack test suites, `backend`/`frontend` submodule wiring — note
+   the `backend` submodule currently points at a personal fork as a
+   stopgap (see TASK-6); don't carry that forward silently, either land
+   TASK-6 first or flag it loudly in the new repo.
+2. Consolidate, don't copy verbatim: `colmena-os` currently has **two**
+   Docker Hub CI workflows building the *same* Dockerfile —
+   `build-and-push.yml` → `communityfirst/colmena-app` and
+   `build-unified.yml` → `${DOCKERHUB_USERNAME}/colmena-unified` (which also
+   dispatches the Balena draft deploy). Collapse into **one** workflow,
+   keeping the `communityfirst/colmena-app` name since it's already locked
+   in downstream (`colmena-casaos-appstore`'s `x-casaos` block references it
+   directly), with the Balena-dispatch step attached to it.
+3. Verify the new repo's CI successfully produces and pushes
+   `communityfirst/colmena-app:latest` (same name/tag, no consumer-facing
+   change for `colmena-casaos-appstore`).
+4. Verify Balena draft/production deploy works end-to-end from the new repo.
+5. Only after 3-4 are green: archive/delete `colmena-os`.
+
+### Acceptance criteria
+- `colmena-unified` exists and its CI produces `communityfirst/colmena-app:latest`
+  with the same fixes as today's image (re-run this session's smoke test
+  against the new repo's output as confirmation).
+- Balena draft deploy verified from the new repo.
+- `colmena-os` archived or deleted.
+
+### Out of scope
+- v2 parity work (publishing public `nextcloud`/`mail` images to restore
+  full feature parity in the CasaOS app) — already tracked in
+  `colmena-casaos-appstore`'s own README backlog.
+- `old/` legacy backups, the generic Claude Code Action workflows
+  (`claude-code-review.yml`, `claude.yml`), and stale `context/*.md` planning
+  docs in `colmena-os` — not worth migrating, already superseded.
+
+---
+
+## TASK-6: Upstream the Nextcloud-optional backend fix properly (real MR, not a fork-pointer)
+
+- **Status:** open
+- **Priority:** medium (current state works but is fragile/non-obvious)
+- **Area:** infra / backend
+
+### Problem
+`colmena-os`'s `.gitmodules` currently points the `backend` submodule at
+`https://gitlab.com/luandro/backend.git` (branch
+`fix/standalone-boot-nextcloud-optional`) instead of the real upstream
+`https://gitlab.com/colmena-project/dev/backend.git`. This was done purely
+so CI could build at all with TASK-5's fix #4 applied — pushing the fix
+directly to the upstream GitLab project wasn't an option (no write access
+there). It's invisible tribal knowledge: nothing about the repo signals that
+its submodule is quietly pinned to a personal fork instead of the canonical
+source, and it will silently diverge from upstream `backend` over time.
+
+### Why it matters
+A build that only works because of an undocumented fork substitution is
+fragile and confusing for the next person (or the next session) who touches
+`colmena-os`/`colmena-unified` — they'll assume the submodule points where
+`.gitmodules` files normally point.
+
+### Proposed approach
+1. Open a merge request against `colmena-project/dev/backend` with the
+   `occ.py` / `create_superadmin.py` fix — already committed and pushed on
+   `luandro/backend@fix/standalone-boot-nextcloud-optional`, ready to submit
+   as-is.
+2. Once merged upstream, repoint `.gitmodules` (in `colmena-os`, or its
+   replacement `colmena-unified` if TASK-5 has landed by then) back at
+   `https://gitlab.com/colmena-project/dev/backend.git` and bump the
+   submodule pointer to the merged commit.
+3. Rebuild and re-verify the image still boots standalone (repeat the
+   smoke test from TASK-5) to confirm nothing was lost in translation.
+
+### Acceptance criteria
+- Submodule URL matches upstream `colmena-project/dev/backend`.
+- No dependency on the personal fork remains.
+- CI still produces a working, standalone-bootable image.
+
+### Out of scope
+- Any other divergence between the fork and upstream `backend` beyond this
+  specific fix.
+
+---
+
 ## How to use this file
 - Pick a task, open a branch, and treat its section as the PRD.
 - Update **Status** (`open` → `in progress` → `done`) as you go.
