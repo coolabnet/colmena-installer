@@ -4,8 +4,7 @@ Open work only. Closed items live in git history (this file supersedes
 TASK.md + HANDOFF.md, merged 2026-08-25). Upstream MR statuses re-verified
 2026-08-25.
 
-## 1. Nudge 4 unmerged upstream MRs · actionable now
-
+## 1. Nudge 5 unmerged upstream MRs · actionable now
 All authored from `luandro/*` forks; we have no write access upstream, so
 merging is on the maintainers.
 
@@ -13,10 +12,8 @@ merging is on the maintainers.
 |---|---|---|
 | [!301](https://gitlab.com/colmena-project/dev/backend/-/merge_requests/301) | backend: Nextcloud graceful degradation (502s + logging, Superadmin-group login, folder auto-create) | Jun 04 |
 | [!302](https://gitlab.com/colmena-project/dev/backend/-/merge_requests/302) | backend: boot standalone without Nextcloud (`occ.py`/`create_superadmin.py`) | Aug 07 |
-| [!357](https://gitlab.com/colmena-project/dev/frontend/-/merge_requests/357) | frontend: chat skeleton loading, My Space nav guard, React key warning | Jun 04 |
-| [!20](https://gitlab.com/colmena-project/dev/colmena-devops/-/merge_requests/20) | devops: Nextcloud named volume (rootless UID), safe `clean.nc`, `docker.build.nc` fix | Jun 04 |
-
-- [ ] review-request comment on each; rebase any that fall behind upstream `dev`
+| [!358](https://gitlab.com/colmena-project/dev/frontend/-/merge_requests/358) | frontend: chat skeleton loading, My Space nav guard, React key warning (recreates closed !357; branch renamed `NNN-*` to pass CI filters) | Aug 25 |
+| [!360](https://gitlab.com/colmena-project/dev/frontend/-/merge_requests/360) | frontend: recorder export hang on empty recordings (render watchdog + nothing_recorded i18n) | Aug 25 |
 
 ## 2. colmena-unified cutover · blocked on !301 + !302
 
