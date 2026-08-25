@@ -114,7 +114,7 @@ done
 #     app store is down/slow, fall back to injecting the release tarball straight
 #     into the shared nextcloud_data volume (mounted at /nextcloud_data, see
 #     docker-compose.yml) and enabling it via the OCS Provisioning API -- this
-#     automates the manual `docker cp` workaround documented in TASK.md.
+#     automates the manual `docker cp` workaround (TASK.md, now in git history).
 SPREED_VERSION="${SPREED_VERSION:-18.0.11}"
 NC_ADMIN_AUTH="$NEXTCLOUD_ADMIN_USER:$NEXTCLOUD_ADMIN_PASSWORD"
 ocs_spreed_enabled() {

@@ -80,5 +80,12 @@ whichever of the three stacks above is currently running via
 - `README.md` — install.sh usage, `run-stack.sh` usage, docker-compose
   quickstart, Terraform deploy.
 - `DOCKER.md` — docker-compose stack detail.
-- `TASK.md` — backlog/PRD-format tracking of deferred work; update status as
-  items are picked up or closed.
+- `TODO.md` — open work only (upstream MR follow-ups, post-merge cutover,
+  published-image fixes); closed items live in git history.
+
+## Autoprompt
+
+For any non-trivial coding request — multi-file features, bug hunts,
+refactors, debugging sessions — immediately invoke `/skill:autoprompt`,
+treating the user's message as the mission. Skip it for trivial one-line
+edits, pure questions, and read-only lookups.
