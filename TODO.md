@@ -21,14 +21,21 @@ merging is on the maintainers.
 - [ ] delete the "personal fork" warning section from colmena-unified's README
 - [ ] rebuild image; rerun standalone smoke test (no Nextcloud container: migrations, seeds, superadmin creation, login)
 
-## 3. Fix schema skew in the published image · actionable now
+## 3. Fix schema skew in the published image · PR open
 
-The frontend OpenAPI client baked into `communityfirst/colmena-app` predates
-the `/api/status/` endpoint, so the SPA's Add-server reachability probe calls
-`status_retrieve()` → `TypeError ... not a function` → always reports
-offline. Flow is dead in every published image; not fixable via env/runtime
-config. Root-caused during CasaOS e2e verification, previously unrecorded.
+ROOT CAUSE (found 2026-08-25, deeper than "stale schema"): frontend
+OpenAPI artifacts are gitignored, and colmena-unified's Dockerfile filled
+the gap by copying the NEXTCLOUD wrapper schema over the frontend's and
+regenerating from it (`|| true` hiding failures) — so the published image
+ships a client for the wrong API entirely.
 
-- [ ] regenerate the frontend client against the current backend schema (or fetch the schema at image-build time)
-- [ ] land as an upstream frontend MR; rebuild via colmena-unified CI
-- [ ] accept: fresh image where Add server → Connect succeeds against a running stack
+FIX IMPLEMENTED → [colmena-unified PR #1](https://github.com/coolabnet/colmena-unified/pull/1):
+tracked `schemas/colmena-openapi.json` generated offline from the pinned
+backend commit (+PROVENANCE), Dockerfile uses it with fail-fast typegen
+and a status_retrieve CI guard, plus workflow fixes (invalid sha-tag on
+PR builds, single-platform PR validation). Opus approved plan rev 6;
+GPT review loop converged to DONE; Build-and-Push CI green on branch.
+
+- [ ] merge PR #1 (maintainer/self per org perms) → CI republishes `latest`
+- [ ] acceptance: pull digest → bare stack → Add server → Connect succeeds (exact TASK-7 failure step) → login smoke
+- [ ] update this file + colmena-unified README known-gaps note
